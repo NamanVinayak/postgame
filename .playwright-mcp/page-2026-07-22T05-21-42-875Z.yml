@@ -1,0 +1,249 @@
+- generic [ref=f3e801]:
+  - banner [ref=f3e802]:
+    - generic [ref=f3e803]:
+      - heading "Postgame" [level=1] [ref=f3e804]
+      - paragraph [ref=f3e805]: "@hikaru"
+    - generic [ref=f3e806]:
+      - button "Refresh" [ref=f3e807]
+      - button "Switch" [ref=f3e808]
+  - list [ref=f3e809]:
+    - listitem [ref=f3e810]:
+      - button "blitzvs ST-Sandavagur (2876)Lossplayed blackJul 2192% ›" [ref=f3e811]:
+        - text: ⚡
+        - generic [ref=f3e812]:
+          - generic [ref=f3e813]:
+            - text: vs ST-Sandavagur
+            - generic [ref=f3e814]: (2876)
+          - generic [ref=f3e815]:
+            - text: Loss
+            - generic "played black"
+            - text: Jul 21
+        - generic [ref=f3e816]: 92% ›
+    - listitem [ref=f3e818]:
+      - button "blitzvs Der_Balak_3Halak (2856)Winplayed whiteJul 20Analyze" [ref=f3e819]:
+        - text: ⚡
+        - generic [ref=f3e820]:
+          - generic [ref=f3e821]:
+            - text: vs Der_Balak_3Halak
+            - generic [ref=f3e822]: (2856)
+          - generic [ref=f3e823]:
+            - text: Win
+            - generic "played white"
+            - text: Jul 20
+        - generic [ref=f3e824]: Analyze
+    - listitem [ref=f3e825]:
+      - button "blitzvs Der_Balak_3Halak (2857)Winplayed blackJul 20Analyze" [ref=f3e826]:
+        - text: ⚡
+        - generic [ref=f3e827]:
+          - generic [ref=f3e828]:
+            - text: vs Der_Balak_3Halak
+            - generic [ref=f3e829]: (2857)
+          - generic [ref=f3e830]:
+            - text: Win
+            - generic "played black"
+            - text: Jul 20
+        - generic [ref=f3e831]: Analyze
+    - listitem [ref=f3e832]:
+      - button "blitzvs Der_Balak_3Halak (2858)Winplayed whiteJul 20Analyze" [ref=f3e833]:
+        - text: ⚡
+        - generic [ref=f3e834]:
+          - generic [ref=f3e835]:
+            - text: vs Der_Balak_3Halak
+            - generic [ref=f3e836]: (2858)
+          - generic [ref=f3e837]:
+            - text: Win
+            - generic "played white"
+            - text: Jul 20
+        - generic [ref=f3e838]: Analyze
+    - listitem [ref=f3e839]:
+      - button "blitzvs Der_Balak_3Halak (2859)Winplayed blackJul 20Analyze" [ref=f3e840]:
+        - text: ⚡
+        - generic [ref=f3e841]:
+          - generic [ref=f3e842]:
+            - text: vs Der_Balak_3Halak
+            - generic [ref=f3e843]: (2859)
+          - generic [ref=f3e844]:
+            - text: Win
+            - generic "played black"
+            - text: Jul 20
+        - generic [ref=f3e845]: Analyze
+    - listitem [ref=f3e846]:
+      - button "blitzvs Der_Balak_3Halak (2860)Winplayed whiteJul 20Analyze" [ref=f3e847]:
+        - text: ⚡
+        - generic [ref=f3e848]:
+          - generic [ref=f3e849]:
+            - text: vs Der_Balak_3Halak
+            - generic [ref=f3e850]: (2860)
+          - generic [ref=f3e851]:
+            - text: Win
+            - generic "played white"
+            - text: Jul 20
+        - generic [ref=f3e852]: Analyze
+    - listitem [ref=f3e853]:
+      - button "bulletvs FaustinoOro (3246)Drawplayed blackJul 18Analyze" [ref=f3e854]:
+        - text: 🚀
+        - generic [ref=f3e855]:
+          - generic [ref=f3e856]:
+            - text: vs FaustinoOro
+            - generic [ref=f3e857]: (3246)
+          - generic [ref=f3e858]:
+            - text: Draw
+            - generic "played black"
+            - text: Jul 18
+        - generic [ref=f3e859]: Analyze
+    - listitem [ref=f3e860]:
+      - button "bulletvs Oleksandr_Bortnyk (3243)Lossplayed whiteJul 18Analyze" [ref=f3e861]:
+        - text: 🚀
+        - generic [ref=f3e862]:
+          - generic [ref=f3e863]:
+            - text: vs Oleksandr_Bortnyk
+            - generic [ref=f3e864]: (3243)
+          - generic [ref=f3e865]:
+            - text: Loss
+            - generic "played white"
+            - text: Jul 18
+        - generic [ref=f3e866]: Analyze
+    - listitem [ref=f3e867]:
+      - button "bulletvs ChristopherYoo (3167)Winplayed blackJul 18Analyze" [ref=f3e868]:
+        - text: 🚀
+        - generic [ref=f3e869]:
+          - generic [ref=f3e870]:
+            - text: vs ChristopherYoo
+            - generic [ref=f3e871]: (3167)
+          - generic [ref=f3e872]:
+            - text: Win
+            - generic "played black"
+            - text: Jul 18
+        - generic [ref=f3e873]: Analyze
+    - listitem [ref=f3e874]:
+      - button "bulletvs Bardiya06 (3164)Lossplayed blackJul 18Analyze" [ref=f3e875]:
+        - text: 🚀
+        - generic [ref=f3e876]:
+          - generic [ref=f3e877]:
+            - text: vs Bardiya06
+            - generic [ref=f3e878]: (3164)
+          - generic [ref=f3e879]:
+            - text: Loss
+            - generic "played black"
+            - text: Jul 18
+        - generic [ref=f3e880]: Analyze
+    - listitem [ref=f3e881]:
+      - button "bulletvs gurelediz (3263)Winplayed whiteJul 18Analyze" [ref=f3e882]:
+        - text: 🚀
+        - generic [ref=f3e883]:
+          - generic [ref=f3e884]:
+            - text: vs gurelediz
+            - generic [ref=f3e885]: (3263)
+          - generic [ref=f3e886]:
+            - text: Win
+            - generic "played white"
+            - text: Jul 18
+        - generic [ref=f3e887]: Analyze
+    - listitem [ref=f3e888]:
+      - button "bulletvs rezamahdavi2008 (3143)Winplayed whiteJul 18Analyze" [ref=f3e889]:
+        - text: 🚀
+        - generic [ref=f3e890]:
+          - generic [ref=f3e891]:
+            - text: vs rezamahdavi2008
+            - generic [ref=f3e892]: (3143)
+          - generic [ref=f3e893]:
+            - text: Win
+            - generic "played white"
+            - text: Jul 18
+        - generic [ref=f3e894]: Analyze
+    - listitem [ref=f3e895]:
+      - button "bulletvs wonderfultime (3215)Winplayed blackJul 18Analyze" [ref=f3e896]:
+        - text: 🚀
+        - generic [ref=f3e897]:
+          - generic [ref=f3e898]:
+            - text: vs wonderfultime
+            - generic [ref=f3e899]: (3215)
+          - generic [ref=f3e900]:
+            - text: Win
+            - generic "played black"
+            - text: Jul 18
+        - generic [ref=f3e901]: Analyze
+    - listitem [ref=f3e902]:
+      - button "bulletvs MITerryble (3175)Winplayed whiteJul 18Analyze" [ref=f3e903]:
+        - text: 🚀
+        - generic [ref=f3e904]:
+          - generic [ref=f3e905]:
+            - text: vs MITerryble
+            - generic [ref=f3e906]: (3175)
+          - generic [ref=f3e907]:
+            - text: Win
+            - generic "played white"
+            - text: Jul 18
+        - generic [ref=f3e908]: Analyze
+    - listitem [ref=f3e909]:
+      - button "bulletvs FaustinoOro (3225)Winplayed blackJul 18Analyze" [ref=f3e910]:
+        - text: 🚀
+        - generic [ref=f3e911]:
+          - generic [ref=f3e912]:
+            - text: vs FaustinoOro
+            - generic [ref=f3e913]: (3225)
+          - generic [ref=f3e914]:
+            - text: Win
+            - generic "played black"
+            - text: Jul 18
+        - generic [ref=f3e915]: Analyze
+    - listitem [ref=f3e916]:
+      - button "bulletvs MITerryble (3194)Winplayed whiteJul 18Analyze" [ref=f3e917]:
+        - text: 🚀
+        - generic [ref=f3e918]:
+          - generic [ref=f3e919]:
+            - text: vs MITerryble
+            - generic [ref=f3e920]: (3194)
+          - generic [ref=f3e921]:
+            - text: Win
+            - generic "played white"
+            - text: Jul 18
+        - generic [ref=f3e922]: Analyze
+    - listitem [ref=f3e923]:
+      - button "bulletvs Sven_Tica (2790)Winplayed whiteJul 18Analyze" [ref=f3e924]:
+        - text: 🚀
+        - generic [ref=f3e925]:
+          - generic [ref=f3e926]:
+            - text: vs Sven_Tica
+            - generic [ref=f3e927]: (2790)
+          - generic [ref=f3e928]:
+            - text: Win
+            - generic "played white"
+            - text: Jul 18
+        - generic [ref=f3e929]: Analyze
+    - listitem [ref=f3e930]:
+      - button "bulletvs FaustinoOro (3227)Winplayed blackJul 18Analyze" [ref=f3e931]:
+        - text: 🚀
+        - generic [ref=f3e932]:
+          - generic [ref=f3e933]:
+            - text: vs FaustinoOro
+            - generic [ref=f3e934]: (3227)
+          - generic [ref=f3e935]:
+            - text: Win
+            - generic "played black"
+            - text: Jul 18
+        - generic [ref=f3e936]: Analyze
+    - listitem [ref=f3e937]:
+      - button "bulletvs wonderfultime (3206)Lossplayed blackJul 18Analyze" [ref=f3e938]:
+        - text: 🚀
+        - generic [ref=f3e939]:
+          - generic [ref=f3e940]:
+            - text: vs wonderfultime
+            - generic [ref=f3e941]: (3206)
+          - generic [ref=f3e942]:
+            - text: Loss
+            - generic "played black"
+            - text: Jul 18
+        - generic [ref=f3e943]: Analyze
+    - listitem [ref=f3e944]:
+      - button "bulletvs hansen (3157)Winplayed whiteJul 18Analyze" [ref=f3e945]:
+        - text: 🚀
+        - generic [ref=f3e946]:
+          - generic [ref=f3e947]:
+            - text: vs hansen
+            - generic [ref=f3e948]: (3157)
+          - generic [ref=f3e949]:
+            - text: Win
+            - generic "played white"
+            - text: Jul 18
+        - generic [ref=f3e950]: Analyze

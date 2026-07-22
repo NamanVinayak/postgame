@@ -1,0 +1,165 @@
+- generic [ref=f3e951]:
+  - banner [ref=f3e952]:
+    - button "‹ Games" [ref=f3e953]
+    - generic [ref=f3e954]:
+      - generic [ref=f3e955]: vs ST-Sandavagur
+      - generic [ref=f3e956]: You lost as black · blitz
+  - generic [ref=f3e957]:
+    - generic [ref=f3e958]:
+      - generic [ref=f3e960]:
+        - generic: "1"
+        - button [disabled] [ref=f3e963]
+      - button [disabled] [ref=f3e976]
+      - button [disabled] [ref=f3e987]
+      - button [disabled] [ref=f3e999]
+      - button [disabled] [ref=f3e1011]
+      - button [disabled] [ref=f3e1027]
+      - button [disabled] [ref=f3e1039]
+      - button [disabled] [ref=f3e1050]
+      - generic [ref=f3e1061]:
+        - generic: "2"
+        - button [disabled] [ref=f3e1064]
+      - button [disabled] [ref=f3e1071]
+      - button [disabled] [ref=f3e1078]
+      - button [disabled] [ref=f3e1085]
+      - button [disabled] [ref=f3e1092]
+      - button [disabled] [ref=f3e1099]
+      - button [disabled] [ref=f3e1106]
+      - button [disabled] [ref=f3e1113]
+      - generic [ref=f3e1117]: "3"
+      - generic [ref=f3e1142]: "4"
+      - generic [ref=f3e1167]: "5"
+      - generic [ref=f3e1192]: "6"
+      - generic [ref=f3e1218]:
+        - generic: "7"
+        - button [disabled] [ref=f3e1221]
+      - button [disabled] [ref=f3e1228]
+      - button [disabled] [ref=f3e1235]
+      - button [disabled] [ref=f3e1242]
+      - button [disabled] [ref=f3e1249]
+      - button [disabled] [ref=f3e1256]
+      - button [disabled] [ref=f3e1263]
+      - button [disabled] [ref=f3e1270]
+      - generic [ref=f3e1275]:
+        - generic:
+          - generic [ref=f3e1276]: h
+          - generic [ref=f3e1277]: "8"
+        - button [disabled] [ref=f3e1279]
+      - generic [ref=f3e1290]:
+        - generic: g
+        - button [disabled] [ref=f3e1293]
+      - generic [ref=f3e1303]:
+        - generic: f
+        - button [disabled] [ref=f3e1306]
+      - generic [ref=f3e1316]:
+        - generic: e
+        - button [disabled] [ref=f3e1319]
+      - generic [ref=f3e1328]:
+        - generic: d
+        - button [disabled] [ref=f3e1331]
+      - generic [ref=f3e1350]:
+        - generic: c
+        - button [disabled] [ref=f3e1353]
+      - generic [ref=f3e1363]:
+        - generic: b
+        - button [disabled] [ref=f3e1366]
+      - generic [ref=f3e1376]:
+        - generic: a
+        - button [disabled] [ref=f3e1379]
+    - status [ref=f3e1389]
+  - generic [ref=f3e1390]:
+    - button "First move" [disabled] [ref=f3e1391]: ⏮
+    - button "Previous move" [disabled] [ref=f3e1392]: ‹
+    - generic [ref=f3e1393]: 0 / 33
+    - button "Next move" [ref=f3e1394]: ›
+    - button "Last move" [ref=f3e1395]: ⏭
+  - generic [ref=f3e1396]:
+    - generic [ref=f3e1397]:
+      - generic [ref=f3e1398]:
+        - text: You
+        - generic [ref=f3e1399]: 92.4%
+      - generic [ref=f3e1400]:
+        - text: Opponent
+        - generic [ref=f3e1401]: 91.8%
+    - generic [ref=f3e1402]:
+      - generic [ref=f3e1403]:
+        - text: "0"
+        - generic [ref=f3e1404]: Blunders
+        - text: "0"
+      - generic [ref=f3e1405]:
+        - text: "0"
+        - generic [ref=f3e1406]: Mistakes
+        - text: "0"
+      - generic [ref=f3e1407]:
+        - text: "2"
+        - generic [ref=f3e1408]: Inaccuracys
+        - text: "1"
+  - img "Evaluation over the game" [ref=f3e1409]
+  - generic [ref=f3e1413]:
+    - generic [ref=f3e1414]:
+      - generic [ref=f3e1415]: "1."
+      - button "e4" [ref=f3e1416]
+      - button "g6" [ref=f3e1417]
+    - generic [ref=f3e1418]:
+      - generic [ref=f3e1419]: "2."
+      - button "d4" [ref=f3e1420]
+      - button "Bg7" [ref=f3e1421]
+    - generic [ref=f3e1422]:
+      - generic [ref=f3e1423]: "3."
+      - button "Be3" [ref=f3e1424]
+      - button "c5" [ref=f3e1425]
+    - generic [ref=f3e1426]:
+      - generic [ref=f3e1427]: "4."
+      - button "c3" [ref=f3e1428]
+      - button "cxd4" [ref=f3e1429]
+    - generic [ref=f3e1430]:
+      - generic [ref=f3e1431]: "5."
+      - button "cxd4" [ref=f3e1432]
+      - button "d5" [ref=f3e1433]
+    - generic [ref=f3e1434]:
+      - generic [ref=f3e1435]: "6."
+      - button "e5" [ref=f3e1436]
+      - button "Nc6" [ref=f3e1437]
+    - generic [ref=f3e1438]:
+      - generic [ref=f3e1439]: "7."
+      - button "Nc3" [ref=f3e1440]
+      - button "Nh6" [ref=f3e1441]
+    - generic [ref=f3e1442]:
+      - generic [ref=f3e1443]: "8."
+      - button "Nf3" [ref=f3e1444]
+      - button "Bg4" [ref=f3e1445]
+    - generic [ref=f3e1446]:
+      - generic [ref=f3e1447]: "9."
+      - button "Qb3" [ref=f3e1448]
+      - button "Bxf3" [ref=f3e1449]
+    - generic [ref=f3e1450]:
+      - generic [ref=f3e1451]: "10."
+      - button "gxf3" [ref=f3e1452]
+      - button "O-O" [ref=f3e1453]
+    - generic [ref=f3e1454]:
+      - generic [ref=f3e1455]: "11."
+      - button "Bd3" [ref=f3e1456]
+      - button "e6" [ref=f3e1457]
+    - generic [ref=f3e1458]:
+      - generic [ref=f3e1459]: "12."
+      - button "h4" [ref=f3e1460]
+      - button "Nf5" [ref=f3e1461]
+    - generic [ref=f3e1462]:
+      - generic [ref=f3e1463]: "13."
+      - button "Bxf5" [ref=f3e1464]
+      - button "gxf5" [ref=f3e1465]
+    - generic [ref=f3e1466]:
+      - generic [ref=f3e1467]: "14."
+      - button "h5" [ref=f3e1468]
+      - button "h6" [ref=f3e1469]
+    - generic [ref=f3e1470]:
+      - generic [ref=f3e1471]: "15."
+      - button "O-O-O" [ref=f3e1472]
+      - button "Kh8" [ref=f3e1473]
+    - generic [ref=f3e1474]:
+      - generic [ref=f3e1475]: "16."
+      - button "Rdg1" [ref=f3e1476]
+      - button "Na5" [ref=f3e1477]
+    - generic [ref=f3e1478]:
+      - generic [ref=f3e1479]: "17."
+      - button "Qc2" [ref=f3e1480]

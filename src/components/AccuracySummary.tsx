@@ -12,6 +12,10 @@ const NOTABLE: Array<'blunder' | 'mistake' | 'inaccuracy'> = [
   'inaccuracy',
 ];
 
+function pluralize(label: string): string {
+  return label.endsWith('y') ? `${label.slice(0, -1)}ies` : `${label}s`;
+}
+
 export function AccuracySummary({ analysis, myColor }: Props) {
   const myAccuracy = myColor === 'white' ? analysis.whiteAccuracy : analysis.blackAccuracy;
   const oppAccuracy = myColor === 'white' ? analysis.blackAccuracy : analysis.whiteAccuracy;
@@ -36,7 +40,7 @@ export function AccuracySummary({ analysis, myColor }: Props) {
             <span className="count-you" style={{ color: CLASS_META[k].color }}>
               {myCounts[k]}
             </span>
-            <span className="count-label">{CLASS_META[k].label}s</span>
+            <span className="count-label">{pluralize(CLASS_META[k].label)}</span>
             <span className="count-opp" style={{ color: CLASS_META[k].color }}>
               {oppCounts[k]}
             </span>

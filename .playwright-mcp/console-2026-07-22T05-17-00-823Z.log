@@ -1,0 +1,15 @@
+[     309ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:5199/node_modules/.vite/deps/react-dom_client.js?v=1a862319:14335
+[     450ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:5199/node_modules/.vite/deps/react-dom_client.js?v=fe5a749f:14335
+[     467ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:5199/favicon.ico:0
+[    8574ms] A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received
+[    8574ms] A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received
+[    8574ms] A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received
+[  441449ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:5199/node_modules/.vite/deps/react-dom_client.js?v=fe5a749f:14335
+[  441467ms] [WARNING] <meta name="apple-mobile-web-app-capable" content="yes"> is deprecated. Please include <meta name="mobile-web-app-capable" content="yes"> @ http://localhost:5199/:0
+[  450692ms] [LOG] [vite] server connection lost. Polling for restart... @ http://localhost:5199/@vite/client:992
+[  450872ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:5199/node_modules/.vite/deps/react-dom_client.js?v=b875a999:14335
+[  450886ms] [WARNING] <meta name="apple-mobile-web-app-capable" content="yes"> is deprecated. Please include <meta name="mobile-web-app-capable" content="yes"> @ http://localhost:5199/:0
+[  460053ms] [LOG] [vite] server connection lost. Polling for restart... @ http://localhost:5199/@vite/client:992
+[  471577ms] A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received
+[  471577ms] A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received
+[  471577ms] A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received

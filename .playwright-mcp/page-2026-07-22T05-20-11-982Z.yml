@@ -1,0 +1,77 @@
+- generic [ref=f3e160]:
+  - banner [ref=f3e161]:
+    - button "‹ Games" [ref=f3e162]
+    - generic [ref=f3e163]:
+      - generic [ref=f3e164]: vs ST-Sandavagur
+      - generic [ref=f3e165]: You lost as black · blitz
+  - generic [ref=f3e166]:
+    - generic [ref=f3e167]:
+      - generic [ref=f3e169]:
+        - generic: "1"
+        - button [disabled] [ref=f3e172]
+      - button [disabled] [ref=f3e185]
+      - button [disabled] [ref=f3e196]
+      - button [disabled] [ref=f3e208]
+      - button [disabled] [ref=f3e220]
+      - button [disabled] [ref=f3e236]
+      - button [disabled] [ref=f3e248]
+      - button [disabled] [ref=f3e259]
+      - generic [ref=f3e270]:
+        - generic: "2"
+        - button [disabled] [ref=f3e273]
+      - button [disabled] [ref=f3e280]
+      - button [disabled] [ref=f3e287]
+      - button [disabled] [ref=f3e294]
+      - button [disabled] [ref=f3e301]
+      - button [disabled] [ref=f3e308]
+      - button [disabled] [ref=f3e315]
+      - button [disabled] [ref=f3e322]
+      - generic [ref=f3e326]: "3"
+      - generic [ref=f3e351]: "4"
+      - generic [ref=f3e376]: "5"
+      - generic [ref=f3e401]: "6"
+      - generic [ref=f3e427]:
+        - generic: "7"
+        - button [disabled] [ref=f3e430]
+      - button [disabled] [ref=f3e437]
+      - button [disabled] [ref=f3e444]
+      - button [disabled] [ref=f3e451]
+      - button [disabled] [ref=f3e458]
+      - button [disabled] [ref=f3e465]
+      - button [disabled] [ref=f3e472]
+      - button [disabled] [ref=f3e479]
+      - generic [ref=f3e484]:
+        - generic:
+          - generic [ref=f3e485]: h
+          - generic [ref=f3e486]: "8"
+        - button [disabled] [ref=f3e488]
+      - generic [ref=f3e499]:
+        - generic: g
+        - button [disabled] [ref=f3e502]
+      - generic [ref=f3e512]:
+        - generic: f
+        - button [disabled] [ref=f3e515]
+      - generic [ref=f3e525]:
+        - generic: e
+        - button [disabled] [ref=f3e528]
+      - generic [ref=f3e537]:
+        - generic: d
+        - button [disabled] [ref=f3e540]
+      - generic [ref=f3e559]:
+        - generic: c
+        - button [disabled] [ref=f3e562]
+      - generic [ref=f3e572]:
+        - generic: b
+        - button [disabled] [ref=f3e575]
+      - generic [ref=f3e585]:
+        - generic: a
+        - button [disabled] [ref=f3e588]
+    - status [ref=f3e598]
+  - generic [ref=f3e599]:
+    - button "First move" [disabled] [ref=f3e600]: ⏮
+    - button "Previous move" [disabled] [ref=f3e601]: ‹
+    - generic [ref=f3e602]: 0 / 33
+    - button "Next move" [ref=f3e603]: ›
+    - button "Last move" [ref=f3e604]: ⏭
+  - status [ref=f3e606]:
+    - generic [ref=f3e607]: Analyzing move 19/33
