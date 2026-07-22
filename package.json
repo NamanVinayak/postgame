@@ -4,9 +4,12 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/copy-stockfish.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/copy-stockfish.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "postinstall": "node scripts/copy-stockfish.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -15,7 +18,8 @@
     "idb": "^8.0.3",
     "react": "^19.2.8",
     "react-chessboard": "^5.10.0",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "stockfish": "^18.0.8"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^7.0.0",
