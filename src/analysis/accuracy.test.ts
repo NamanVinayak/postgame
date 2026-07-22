@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { gameAccuracies, moveAccuracy, type MoveScore } from './accuracy';
+import { calibrateToChesscom, gameAccuracies, moveAccuracy, type MoveScore } from './accuracy';
 import type { Color } from '../types';
 
 /** Build alternating-color moves (white, black, white, …) with given accuracies. */
@@ -25,6 +25,21 @@ describe('moveAccuracy', () => {
   test('is clamped to [0, 100]', () => {
     expect(moveAccuracy(100, 0)).toBeGreaterThanOrEqual(0);
     expect(moveAccuracy(50, 55)).toBeLessThanOrEqual(100);
+  });
+});
+
+describe('calibrateToChesscom', () => {
+  test('is identity at the extremes', () => {
+    expect(calibrateToChesscom(0)).toBe(0);
+    expect(calibrateToChesscom(100)).toBe(100);
+  });
+  test('compresses toward the Chess.com sample (83.3 -> ~73.4)', () => {
+    expect(calibrateToChesscom(83.3)).toBeCloseTo(73.4, 0);
+  });
+  test('always lowers or holds a raw score (never inflates)', () => {
+    for (const raw of [40, 60, 75, 90, 95]) {
+      expect(calibrateToChesscom(raw)).toBeLessThanOrEqual(raw);
+    }
   });
 });
 

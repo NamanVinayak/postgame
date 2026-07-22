@@ -1,7 +1,17 @@
 import type { Color } from '../types';
+import { ACCURACY_CALIBRATION_GAMMA } from '../constants';
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+/**
+ * Nudge a raw (Lichess-style) accuracy toward Chess.com's stricter CAPS2 band.
+ * `100 * (raw/100)^gamma`: identity at 0 and 100, compressive in the middle.
+ */
+export function calibrateToChesscom(rawAccuracy: number): number {
+  const clamped = clamp(rawAccuracy, 0, 100);
+  return 100 * Math.pow(clamped / 100, ACCURACY_CALIBRATION_GAMMA);
 }
 
 /**
@@ -64,7 +74,7 @@ export function gameAccuracies(
     const weightedMean =
       accs.reduce((a, acc, j) => a + acc * ws[j], 0) / ws.reduce((a, b) => a + b, 0);
     const harmonicMean = accs.length / accs.reduce((a, acc) => a + 1 / Math.max(acc, 1), 0);
-    return (weightedMean + harmonicMean) / 2;
+    return calibrateToChesscom((weightedMean + harmonicMean) / 2);
   };
 
   return { white: forColor('white'), black: forColor('black') };

@@ -1,5 +1,15 @@
 /** Bump when the cached AnalysisResult shape or scoring changes (invalidates old caches). */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
+
+/**
+ * Our raw score uses the public Lichess formula, which reads ~10 points higher
+ * than Chess.com's proprietary CAPS2 in the 70–90 range. We nudge toward
+ * Chess.com by applying `100 * (raw/100)^GAMMA` to the final game accuracy —
+ * identity at 0 and 100, compressive in between. GAMMA is fit to observed
+ * Chess.com samples (e.g. a game Chess.com scored 73.4 that we scored 83.3 →
+ * gamma ≈ 1.7). Refine it as more (our-score, chess.com-score) pairs come in.
+ */
+export const ACCURACY_CALIBRATION_GAMMA = 1.7;
 
 /** Engine search budget per position. */
 export const ENGINE = {

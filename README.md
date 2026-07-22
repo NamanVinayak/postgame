@@ -82,9 +82,12 @@ docs/superpowers/             Design spec and implementation plan
   [react-chessboard](https://github.com/Clariity/react-chessboard) for move
   handling and the board.
 
-Accuracy and move classifications are our own approximation, tuned to feel
-familiar — they are **not** Chess.com's proprietary numbers and won't match them
-exactly.
+Accuracy uses the public **Lichess** method (centipawns → win%, per-move
+accuracy, volatility-weighted + harmonic aggregation), then a small calibration
+curve nudges the result toward **Chess.com's** stricter CAPS2 band — Chess.com's
+own formula is proprietary and factors player rating, so these are an
+approximation, not their exact numbers. The calibration (`ACCURACY_CALIBRATION_GAMMA`
+in `src/constants.ts`) is fit to observed Chess.com samples and can be refined.
 
 The application code in this repository is released under the MIT License
 (see `LICENSE`). The bundled Stockfish engine remains under its own GPLv3 license.
