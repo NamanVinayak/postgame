@@ -19,7 +19,10 @@ demonstrating what coding agents can build. No promise of long-term hosting.
 ## 2. Goals / Non-goals
 
 **Goals (v1 scope)**
-1. Enter a Chess.com username once; the app remembers it.
+1. Connect a Chess.com username; the app remembers it and auto-fetches for it
+   on every open. The user can **disconnect and connect a different username**
+   at any time (own alt account, an opponent, a future opponent) — like log
+   out / log in.
 2. On open, fetch the user's recent games and show them newest-first.
 3. Auto-refresh when the user returns to the app after playing.
 4. Tap **Analyze** on a chosen game to run a full review on-device.
@@ -88,10 +91,16 @@ ply. `react-chessboard` renders the position on the Review screen.
 
 ## 5. Screens
 
-### 5.1 Connect (first launch only)
-- Single input: Chess.com username.
-- Validate via `GET /pub/player/{username}` (200 = exists). Friendly error if not.
-- Save to localStorage. Never shown again unless the user changes it in Settings.
+### 5.1 Connect / switch account
+- Single input: Chess.com username. Validate via `GET /pub/player/{username}`
+  (200 = exists); friendly error if not. Save as the **connected** username in
+  localStorage.
+- Shown on first launch and any time no account is connected.
+- **Disconnect / switch:** a single control (header menu / Settings) logs out
+  the current username and returns here to connect a different one — like log
+  out / log in. This supports analyzing multiple accounts over time (your alt,
+  an opponent, someone you're about to play).
+- On every open, the app auto-fetches for the last connected username.
 
 ### 5.2 Game list (home)
 - On mount shows **"Fetching your latest games…"** while loading.
@@ -156,7 +165,9 @@ All thresholds, movetime, and the win-% conversion live in one documented
 - `IndexedDB`: `analyses` store keyed by game id (`uuid` or `url`), holding the
   full `AnalysisResult` (per-ply evals, classifications, best moves, reasons,
   accuracies, schema version). Presence of a record = "already analyzed" →
-  instant re-open, never recomputed.
+  instant re-open, never recomputed. Keys are globally unique game ids, so
+  cached analyses stay valid across account switches (analyzing an opponent
+  then switching back to your own account keeps both sets of reviews).
 
 ## 9. PWA specifics
 
