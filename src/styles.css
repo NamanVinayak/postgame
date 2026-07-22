@@ -1,0 +1,20 @@
+:root {
+  color-scheme: dark;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #1b1a17;
+  color: #ece9e2;
+}
+
+.app-shell {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 16px;
+}
