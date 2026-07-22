@@ -5,15 +5,23 @@ import { analyzeGame } from '../analysis/analyzeGame';
 import { createStockfishEngine } from '../services/engine/stockfishEngine';
 import { getAnalysis, saveAnalysis } from '../services/storage';
 import { Board } from './Board';
+import { MoveBadge } from './MoveBadge';
+import { EvalBar } from './EvalBar';
 import { MoveList } from './MoveList';
 import { EvalGraph } from './EvalGraph';
 import { AccuracySummary } from './AccuracySummary';
-import { CLASS_META, MISSED_WIN_META } from './classificationMeta';
+import {
+  CLASS_GLYPH,
+  CLASS_META,
+  MISSED_WIN_GLYPH,
+  MISSED_WIN_META,
+} from './classificationMeta';
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
 interface Props {
   game: GameSummary;
+  myUsername: string;
   onBack: () => void;
 }
 
@@ -22,22 +30,25 @@ function outcomeLine(game: GameSummary): string {
   return `You ${verb} as ${game.myColor}`;
 }
 
-export function ReviewScreen({ game, onBack }: Props) {
+export function ReviewScreen({ game, myUsername, onBack }: Props) {
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [error, setError] = useState<string | null>(null);
   const [index, setIndex] = useState(0);
 
-  const positions = useMemo(() => {
+  const { positions, moveTos } = useMemo(() => {
     try {
       const chess = new Chess();
       chess.loadPgn(game.pgn);
       const verbose = chess.history({ verbose: true });
-      if (verbose.length === 0) return [chess.fen()];
-      return [verbose[0].before, ...verbose.map((m) => m.after)];
+      if (verbose.length === 0) return { positions: [chess.fen()], moveTos: [] as string[] };
+      return {
+        positions: [verbose[0].before, ...verbose.map((m) => m.after)],
+        moveTos: verbose.map((m) => m.to),
+      };
     } catch {
-      return [START_FEN];
+      return { positions: [START_FEN], moveTos: [] as string[] };
     }
   }, [game.pgn]);
 
@@ -95,6 +106,9 @@ export function ReviewScreen({ game, onBack }: Props) {
     (selectedPly.isMissedWin ? MISSED_WIN_META : CLASS_META[selectedPly.classification]);
   const progressPct = progress.total ? Math.round((progress.done / progress.total) * 100) : 0;
 
+  const currentWinPctWhite = selectedPly ? selectedPly.winPctWhite : 50;
+  const opponentColor: typeof game.myColor = game.myColor === 'white' ? 'black' : 'white';
+
   return (
     <div className="app-shell review">
       <header className="review-header">
@@ -109,7 +123,43 @@ export function ReviewScreen({ game, onBack }: Props) {
         </div>
       </header>
 
-      <Board fen={positions[index]} orientation={game.myColor} />
+      <div className="board-block">
+        <div className="player-label">
+          <span className={`color-dot ${opponentColor}`} aria-hidden="true" />
+          <span className="pl-name">{game.opponent.username}</span>
+          <span className="pl-rating">({game.opponent.rating})</span>
+        </div>
+
+        <div className="board-row">
+          <EvalBar winPctWhite={currentWinPctWhite} orientation={game.myColor} />
+          <div className="board-area">
+            <Board fen={positions[index]} orientation={game.myColor} />
+            {selectedPly && index >= 1 && moveTos[index - 1] && (
+              <MoveBadge
+                square={moveTos[index - 1]}
+                orientation={game.myColor}
+                glyph={
+                  selectedPly.isMissedWin
+                    ? MISSED_WIN_GLYPH
+                    : CLASS_GLYPH[selectedPly.classification]
+                }
+                color={
+                  selectedPly.isMissedWin
+                    ? MISSED_WIN_META.color
+                    : CLASS_META[selectedPly.classification].color
+                }
+              />
+            )}
+          </div>
+        </div>
+
+        <div className="player-label">
+          <span className={`color-dot ${game.myColor}`} aria-hidden="true" />
+          <span className="pl-name">{myUsername}</span>
+          <span className="pl-rating">({game.myRating})</span>
+          <span className="pl-you">You</span>
+        </div>
+      </div>
 
       <div className="nav-controls">
         <button onClick={() => seek(0)} disabled={index === 0} aria-label="First move">

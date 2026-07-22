@@ -14,7 +14,9 @@ export default function App() {
   }
 
   if (selected) {
-    return <ReviewScreen game={selected} onBack={() => setSelected(null)} />;
+    return (
+      <ReviewScreen game={selected} myUsername={username} onBack={() => setSelected(null)} />
+    );
   }
 
   return (

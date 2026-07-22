@@ -10,10 +10,21 @@ interface Props {
 }
 
 export function MoveList({ plies, currentIndex, onSelect }: Props) {
+  const containerRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    activeRef.current?.scrollIntoView({ block: 'nearest', inline: 'center' });
+    const container = containerRef.current;
+    const active = activeRef.current;
+    if (!container || !active) return;
+    // Scroll *within* the move list only — never scroll the page.
+    const activeTop = active.offsetTop - container.offsetTop;
+    const activeBottom = activeTop + active.offsetHeight;
+    if (activeTop < container.scrollTop) {
+      container.scrollTop = activeTop;
+    } else if (activeBottom > container.scrollTop + container.clientHeight) {
+      container.scrollTop = activeBottom - container.clientHeight;
+    }
   }, [currentIndex]);
 
   // Group into full moves: [whitePly, blackPly?].
@@ -41,7 +52,7 @@ export function MoveList({ plies, currentIndex, onSelect }: Props) {
   }
 
   return (
-    <div className="move-list">
+    <div className="move-list" ref={containerRef}>
       {rows.map((row) => (
         <div className="move-row" key={row.moveNo}>
           <span className="move-no">{row.moveNo}.</span>

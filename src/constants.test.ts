@@ -8,8 +8,9 @@ describe('constants', () => {
     expect(DELTA.mistake).toBeLessThan(DELTA.blunder);
   });
 
-  test('schema version is 1', () => {
-    expect(SCHEMA_VERSION).toBe(1);
+  test('schema version is a positive integer', () => {
+    expect(Number.isInteger(SCHEMA_VERSION)).toBe(true);
+    expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(1);
   });
 
   test('missed-win drop is below the winning threshold', () => {

@@ -10,3 +10,14 @@ export const CLASS_META: Record<Classification, { label: string; color: string }
 };
 
 export const MISSED_WIN_META = { label: 'Missed win', color: '#c77dff' };
+
+/** Compact glyph shown on the board square for each move (Chess.com/Lichess-style). */
+export const CLASS_GLYPH: Record<Classification, string> = {
+  best: '★',
+  good: '✓',
+  inaccuracy: '?!',
+  mistake: '?',
+  blunder: '??',
+};
+
+export const MISSED_WIN_GLYPH = '✕';

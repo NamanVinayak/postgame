@@ -1,5 +1,5 @@
-/** Bump when the cached AnalysisResult shape changes (invalidates old caches). */
-export const SCHEMA_VERSION = 1;
+/** Bump when the cached AnalysisResult shape or scoring changes (invalidates old caches). */
+export const SCHEMA_VERSION = 3;
 
 /** Engine search budget per position. */
 export const ENGINE = {

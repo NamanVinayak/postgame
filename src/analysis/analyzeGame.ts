@@ -4,7 +4,7 @@ import { ENGINE, SCHEMA_VERSION } from '../constants';
 import type { Engine, Evaluation } from '../services/engine/types';
 import { evalToWinPct } from './winPct';
 import { classifyMove, isMissedWin } from './classify';
-import { gameAccuracy, moveAccuracy } from './accuracy';
+import { gameAccuracies, moveAccuracy } from './accuracy';
 import { explainMistake } from './reasons';
 
 export interface ProgressCb {
@@ -57,9 +57,9 @@ export async function analyzeGame(
   const total = moves.length;
 
   const plies: PlyAnalysis[] = [];
-  const whiteAccuracies: number[] = [];
-  const blackAccuracies: number[] = [];
   const counts = { white: emptyCounts(), black: emptyCounts() };
+  // White win% at each position: index 0 is the start, index i+1 is after ply i.
+  const winPctWhiteSeq: number[] = [];
 
   for (let i = 0; i < total; i++) {
     const move = moves[i];
@@ -89,6 +89,13 @@ export async function analyzeGame(
     const whitePov = moverColor === 'white' ? evalAfterMover : evalAfterOpp;
     const winPctWhite = evalToWinPct(whitePov.cp, whitePov.mate);
 
+    // Build the White-POV win% sequence: the start (before ply 0), then each after-move.
+    if (i === 0) {
+      // At ply 0 White is to move, so evalBefore is already White's POV.
+      winPctWhiteSeq.push(evalToWinPct(evalBefore.cp, evalBefore.mate));
+    }
+    winPctWhiteSeq.push(winPctWhite);
+
     const reason = explainMistake({
       fenBefore,
       fenAfter,
@@ -115,16 +122,20 @@ export async function analyzeGame(
     });
 
     counts[moverColor][classification]++;
-    (moverColor === 'white' ? whiteAccuracies : blackAccuracies).push(accuracy);
     onProgress?.(i + 1, total);
   }
+
+  const { white, black } = gameAccuracies(
+    winPctWhiteSeq,
+    plies.map((p) => ({ color: p.color, accuracy: p.accuracy })),
+  );
 
   return {
     gameId,
     schemaVersion: SCHEMA_VERSION,
     plies,
-    whiteAccuracy: gameAccuracy(whiteAccuracies),
-    blackAccuracy: gameAccuracy(blackAccuracies),
+    whiteAccuracy: white,
+    blackAccuracy: black,
     counts,
     createdAt: Date.now(),
   };
