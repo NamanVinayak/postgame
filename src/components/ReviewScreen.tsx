@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Chess } from 'chess.js';
 import type { AnalysisResult, GameSummary } from '../types';
 import { analyzeGame } from '../analysis/analyzeGame';
@@ -36,6 +36,8 @@ export function ReviewScreen({ game, myUsername, onBack }: Props) {
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [error, setError] = useState<string | null>(null);
   const [index, setIndex] = useState(0);
+  const [checkedCache, setCheckedCache] = useState(false);
+  const runningRef = useRef(false);
 
   const { positions, moveTos } = useMemo(() => {
     try {
@@ -54,34 +56,9 @@ export function ReviewScreen({ game, myUsername, onBack }: Props) {
 
   const maxIndex = positions.length - 1;
 
-  useEffect(() => {
-    setIndex(0);
-    setAnalysis(null);
-    setError(null);
-    let active = true;
-    getAnalysis(game.id).then((cached) => {
-      if (active) setAnalysis(cached);
-    });
-    return () => {
-      active = false;
-    };
-  }, [game.id]);
-
-  const seek = useCallback(
-    (next: number) => setIndex(Math.max(0, Math.min(maxIndex, next))),
-    [maxIndex],
-  );
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowLeft') seek(index - 1);
-      if (e.key === 'ArrowRight') seek(index + 1);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [index, seek]);
-
-  async function runAnalysis() {
+  const runAnalysis = useCallback(async () => {
+    if (runningRef.current) return; // guard against double-invoke (StrictMode / rapid taps)
+    runningRef.current = true;
     setAnalyzing(true);
     setError(null);
     setProgress({ done: 0, total: Math.max(1, maxIndex) });
@@ -97,8 +74,45 @@ export function ReviewScreen({ game, myUsername, onBack }: Props) {
     } finally {
       engine.terminate();
       setAnalyzing(false);
+      runningRef.current = false;
     }
-  }
+  }, [game.pgn, game.id, maxIndex]);
+
+  // Load the cached analysis; if there is none, start analyzing automatically —
+  // opening an unanalyzed game already means "analyze it".
+  useEffect(() => {
+    setIndex(0);
+    setAnalysis(null);
+    setError(null);
+    setCheckedCache(false);
+    let active = true;
+    getAnalysis(game.id).then((cached) => {
+      if (!active) return;
+      setCheckedCache(true);
+      if (cached) {
+        setAnalysis(cached);
+      } else {
+        runAnalysis();
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [game.id, runAnalysis]);
+
+  const seek = useCallback(
+    (next: number) => setIndex(Math.max(0, Math.min(maxIndex, next))),
+    [maxIndex],
+  );
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft') seek(index - 1);
+      if (e.key === 'ArrowRight') seek(index + 1);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [index, seek]);
 
   const selectedPly = analysis && index >= 1 ? analysis.plies[index - 1] : null;
   const badge =
@@ -187,9 +201,9 @@ export function ReviewScreen({ game, myUsername, onBack }: Props) {
         </button>
       </div>
 
-      {!analysis && !analyzing && (
+      {checkedCache && !analysis && !analyzing && (
         <button className="analyze-big" onClick={runAnalysis}>
-          Analyze this game
+          {error ? 'Retry analysis' : 'Analyze this game'}
         </button>
       )}
 
