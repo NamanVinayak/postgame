@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useConnectedUser } from './hooks/useConnectedUser';
 import { ConnectScreen } from './components/ConnectScreen';
 import { GameList } from './components/GameList';
+import { ReviewScreen } from './components/ReviewScreen';
 import type { GameSummary } from './types';
 
 export default function App() {
@@ -13,15 +14,7 @@ export default function App() {
   }
 
   if (selected) {
-    // ReviewScreen is wired in Task 12.
-    return (
-      <div className="app-shell">
-        <button className="link-button" onClick={() => setSelected(null)}>
-          ‹ Back
-        </button>
-        <p>Selected: vs {selected.opponent.username}</p>
-      </div>
-    );
+    return <ReviewScreen game={selected} onBack={() => setSelected(null)} />;
   }
 
   return (
