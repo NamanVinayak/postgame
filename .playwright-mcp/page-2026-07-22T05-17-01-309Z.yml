@@ -1,9 +1,0 @@
-- generic [ref=f3e4]:
-  - heading "Postgame" [level=1] [ref=f3e5]
-  - paragraph [ref=f3e6]: Free game review for the games you play on Chess.com.
-  - generic [ref=f3e7]:
-    - text: Chess.com username
-    - textbox "Chess.com username" [ref=f3e8]:
-      - /placeholder: e.g. MagnusCarlsen
-    - button "Connect" [ref=f3e9]
-  - paragraph [ref=f3e10]: Not affiliated with Chess.com. Reads only your public games — no password needed.
