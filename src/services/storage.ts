@@ -59,3 +59,25 @@ export async function getAnalyzedIds(ids: string[]): Promise<Set<string>> {
   );
   return found;
 }
+
+export interface AnalysisSummary {
+  whiteAccuracy: number;
+  blackAccuracy: number;
+}
+
+/** Accuracy summaries for the given ids that have a fresh cached analysis. */
+export async function getAnalysisSummaries(
+  ids: string[],
+): Promise<Map<string, AnalysisSummary>> {
+  const database = await db();
+  const map = new Map<string, AnalysisSummary>();
+  await Promise.all(
+    ids.map(async (id) => {
+      const r = await database.get('analyses', id);
+      if (r && r.schemaVersion === SCHEMA_VERSION) {
+        map.set(id, { whiteAccuracy: r.whiteAccuracy, blackAccuracy: r.blackAccuracy });
+      }
+    }),
+  );
+  return map;
+}

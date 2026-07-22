@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from 'vitest';
 import {
   clearUsername,
   getAnalysis,
+  getAnalysisSummaries,
   getAnalyzedIds,
   getUsername,
   saveAnalysis,
@@ -59,5 +60,14 @@ describe('analysis cache', () => {
     expect(ids.has('a')).toBe(true);
     expect(ids.has('b')).toBe(false);
     expect(ids.has('c')).toBe(false);
+  });
+
+  test('getAnalysisSummaries returns accuracies for fresh cached ids only', async () => {
+    await saveAnalysis(makeResult('s1'));
+    await saveAnalysis(makeResult('s2', SCHEMA_VERSION - 1));
+    const map = await getAnalysisSummaries(['s1', 's2', 's3']);
+    expect(map.get('s1')).toEqual({ whiteAccuracy: 90, blackAccuracy: 80 });
+    expect(map.has('s2')).toBe(false);
+    expect(map.has('s3')).toBe(false);
   });
 });
