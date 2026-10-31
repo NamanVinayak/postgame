@@ -10,8 +10,8 @@ const analysis: AnalysisResult = {
   whiteAccuracy: 90.2,
   blackAccuracy: 71.6,
   counts: {
-    white: { best: 10, good: 5, inaccuracy: 1, mistake: 0, blunder: 0 },
-    black: { best: 4, good: 6, inaccuracy: 2, mistake: 1, blunder: 3 },
+    white: { great: 0, best: 10, good: 5, inaccuracy: 1, mistake: 0, blunder: 0 },
+    black: { great: 0, best: 4, good: 6, inaccuracy: 2, mistake: 1, blunder: 3 },
   },
   createdAt: 0,
 };

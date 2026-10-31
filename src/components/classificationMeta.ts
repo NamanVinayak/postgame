@@ -2,6 +2,7 @@ import type { Classification } from '../types';
 
 /** Label + accent color for each move classification (own palette, not Chess.com's). */
 export const CLASS_META: Record<Classification, { label: string; color: string }> = {
+  great: { label: 'Great', color: '#3ec5b3' },
   best: { label: 'Best', color: '#7fa650' },
   good: { label: 'Good', color: '#9bbf7f' },
   inaccuracy: { label: 'Inaccuracy', color: '#e6c34d' },
@@ -13,6 +14,7 @@ export const MISSED_WIN_META = { label: 'Missed win', color: '#c77dff' };
 
 /** Compact glyph shown on the board square for each move (Chess.com/Lichess-style). */
 export const CLASS_GLYPH: Record<Classification, string> = {
+  great: '!',
   best: '★',
   good: '✓',
   inaccuracy: '?!',

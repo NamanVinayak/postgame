@@ -1,5 +1,5 @@
 /** Bump when the cached AnalysisResult shape or scoring changes (invalidates old caches). */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 /**
  * Our raw score uses the public Lichess formula, which reads ~10 points higher
@@ -11,11 +11,23 @@ export const SCHEMA_VERSION = 4;
  */
 export const ACCURACY_CALIBRATION_GAMMA = 1.7;
 
-/** Engine search budget per position. */
+/**
+ * Engine search budget per position. At fixed total wall-time, searches are
+ * halved by replaying each position's after-eval as the next ply's before-eval
+ * (see analyzeGame), so movetime can be much deeper than it looks. MultiPV 2
+ * exposes the engine's second-best line, which powers Great-move detection.
+ */
 export const ENGINE = {
-  movetimeMs: 400,
-  multiPV: 1,
+  movetimeMs: 900,
+  multiPV: 2,
 };
+
+/**
+ * A played move counts as Chess.com-style "Great" when it is the engine's best
+ * move AND the second-best alternative is at least this many win% worse
+ * (mover's POV) — i.e. there was effectively only one good move.
+ */
+export const GREAT_MOVE = { minWinPctGap: 5 };
 
 /**
  * Win-probability lost (in percentage points, mover POV) that separates each

@@ -19,8 +19,8 @@ function makeResult(gameId: string, schemaVersion = SCHEMA_VERSION): AnalysisRes
     whiteAccuracy: 90,
     blackAccuracy: 80,
     counts: {
-      white: { best: 1, good: 0, inaccuracy: 0, mistake: 0, blunder: 0 },
-      black: { best: 0, good: 1, inaccuracy: 0, mistake: 0, blunder: 0 },
+      white: { great: 0, best: 1, good: 0, inaccuracy: 0, mistake: 0, blunder: 0 },
+      black: { great: 0, best: 0, good: 1, inaccuracy: 0, mistake: 0, blunder: 0 },
     },
     createdAt: 123,
   };

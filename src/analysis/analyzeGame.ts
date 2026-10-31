@@ -1,9 +1,9 @@
 import { Chess } from 'chess.js';
 import type { AnalysisResult, Classification, Color, PlyAnalysis } from '../types';
-import { ENGINE, SCHEMA_VERSION } from '../constants';
+import { ENGINE, GREAT_MOVE, SCHEMA_VERSION } from '../constants';
 import type { Engine, Evaluation } from '../services/engine/types';
 import { evalToWinPct } from './winPct';
-import { classifyMove, isMissedWin } from './classify';
+import { classifyMove, isGreatMove, isMissedWin } from './classify';
 import { gameAccuracies, moveAccuracy } from './accuracy';
 import { explainMistake } from './reasons';
 
@@ -16,6 +16,7 @@ function negate(evaluation: Evaluation): Evaluation {
     cp: evaluation.cp === null ? null : -evaluation.cp,
     mate: evaluation.mate === null ? null : -evaluation.mate,
     bestMoveUci: evaluation.bestMoveUci,
+    secondBest: evaluation.secondBest,
   };
 }
 
@@ -36,7 +37,7 @@ function uciToSan(fen: string, uci: string | null): string | null {
 }
 
 function emptyCounts(): Record<Classification, number> {
-  return { best: 0, good: 0, inaccuracy: 0, mistake: 0, blunder: 0 };
+  return { great: 0, best: 0, good: 0, inaccuracy: 0, mistake: 0, blunder: 0 };
 }
 
 /**
@@ -61,14 +62,28 @@ export async function analyzeGame(
   // White win% at each position: index 0 is the start, index i+1 is after ply i.
   const winPctWhiteSeq: number[] = [];
 
+  /**
+   * One search per distinct position: the after-position eval of ply i is the
+   * same FEN as the before-position eval of ply i+1, so it is cached instead of
+   * searched twice. Frees about half the wall-time for deeper searches.
+   */
+  const evalsByFen = new Map<string, Evaluation>();
+  const evaluatePosition = async (fen: string): Promise<Evaluation> => {
+    const cached = evalsByFen.get(fen);
+    if (cached) return cached;
+    const evaluation = await engine.evaluate(fen, ENGINE.movetimeMs);
+    evalsByFen.set(fen, evaluation);
+    return evaluation;
+  };
+
   for (let i = 0; i < total; i++) {
     const move = moves[i];
     const fenBefore = move.before;
     const fenAfter = move.after;
     const moverColor: Color = move.color === 'w' ? 'white' : 'black';
 
-    const evalBefore = await engine.evaluate(fenBefore, ENGINE.movetimeMs);
-    const evalAfterOpp = await engine.evaluate(fenAfter, ENGINE.movetimeMs);
+    const evalBefore = await evaluatePosition(fenBefore);
+    const evalAfterOpp = await evaluatePosition(fenAfter);
     const evalAfterMover = negate(evalAfterOpp);
 
     // Win% from the mover's point of view.
@@ -78,7 +93,26 @@ export async function analyzeGame(
 
     const playedIsBest =
       evalBefore.bestMoveUci !== null && evalBefore.bestMoveUci === move.lan;
-    const classification = classifyMove(winPctLost, playedIsBest);
+
+    let classification = classifyMove(winPctLost, playedIsBest);
+
+    // Only one legal move: nothing was decided, always treat as best.
+    let forced = false;
+    try {
+      forced = new Chess(fenBefore).moves().length === 1;
+    } catch {
+      forced = false;
+    }
+    if (forced) {
+      classification = 'best';
+    } else if (playedIsBest) {
+      const winSecondBestMover = evalBefore.secondBest
+        ? evalToWinPct(evalBefore.secondBest.cp, evalBefore.secondBest.mate)
+        : null;
+      if (isGreatMove(winBestMover, winSecondBestMover, GREAT_MOVE.minWinPctGap)) {
+        classification = 'great';
+      }
+    }
     const missed = isMissedWin(winBestMover, winPlayedMover);
     const accuracy = moveAccuracy(winBestMover, winPlayedMover);
 

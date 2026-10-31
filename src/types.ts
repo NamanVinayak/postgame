@@ -20,6 +20,7 @@ export interface GameSummary {
 }
 
 export type Classification =
+  | 'great'
   | 'best'
   | 'good'
   | 'inaccuracy'

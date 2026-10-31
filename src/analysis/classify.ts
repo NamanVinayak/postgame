@@ -1,4 +1,4 @@
-import { DELTA, MISSED_WIN } from '../constants';
+import { DELTA, GREAT_MOVE, MISSED_WIN } from '../constants';
 import type { Classification } from '../types';
 
 /**
@@ -17,5 +17,21 @@ export function classifyMove(winPctLost: number, playedIsBest: boolean): Classif
 export function isMissedWin(winBeforeMover: number, winAfterMover: number): boolean {
   return (
     winBeforeMover >= MISSED_WIN.winningWinPct && winAfterMover <= MISSED_WIN.dropTo
+  );
+}
+
+/**
+ * Chess.com-style "Great move": the played move was the engine's best AND the
+ * second-best line is significantly worse — there was effectively only one
+ * good move. Both win% values are from the mover's POV; `gapPct` defaults to
+ * `GREAT_MOVE.minWinPctGap`.
+ */
+export function isGreatMove(
+  winBestMover: number,
+  winSecondBestMover: number | null,
+  gapPct: number = GREAT_MOVE.minWinPctGap,
+): boolean {
+  return (
+    winSecondBestMover !== null && winBestMover - winSecondBestMover >= gapPct
   );
 }

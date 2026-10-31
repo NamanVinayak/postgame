@@ -5,3 +5,4 @@ dist/
 public/stockfish/
 .playwright-mcp/
 dev-dist/
+*.tsbuildinfo

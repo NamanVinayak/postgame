@@ -18,9 +18,14 @@ what happened.
 - Your recent games load automatically on open and when you return to the app.
 - Tap **Analyze** on any game to review it on-device.
 - See your accuracy vs. your opponent's, per-move classifications
-  (Best / Good / Inaccuracy / Mistake / Blunder / Missed win), the engine's
-  better move, plain-English explanations of the big mistakes, and a win-%
-  graph you can scrub move by move.
+  (Great / Best / Good / Inaccuracy / Mistake / Blunder / Missed win), the
+  engine's better move, plain-English explanations of the big mistakes, and a
+  win-% graph you can scrub move by move.
+- **Great moves** (the Chess.com-style "only good move here"): when your move
+  matches the engine's first choice and the second-best alternative is clearly
+  worse, it gets its own teal `!` badge.
+- Positions with exactly one legal move are always rated **Best** — nothing was
+  decided there.
 - Analyzed games are cached, so reopening one is instant.
 
 ## How it works (no backend, no keys, no cost)
@@ -72,6 +77,13 @@ src/
 docs/superpowers/             Design spec and implementation plan
 ```
 
+## How it was built
+
+I designed, directed and tested Postgame, and wrote it with Claude Code as my
+coding agent. The design spec and the step-by-step implementation plan it was
+built from are in `docs/superpowers/`. The analysis logic is covered by unit
+tests (`npm test`).
+
 ## Credits & licensing
 
 - **Stockfish** — the chess engine, © the Stockfish contributors, licensed
@@ -88,6 +100,22 @@ curve nudges the result toward **Chess.com's** stricter CAPS2 band — Chess.com
 own formula is proprietary and factors player rating, so these are an
 approximation, not their exact numbers. The calibration (`ACCURACY_CALIBRATION_GAMMA`
 in `src/constants.ts`) is fit to observed Chess.com samples and can be refined.
+
+Each distinct position is searched exactly once: the eval of the position
+after a move is re-used as the next move's "before" eval, which halves the
+search count and lets every search go deeper (`ENGINE.movetimeMs` in
+`src/constants.ts`, default 900ms). `ENGINE.multiPV = 2` also asks Stockfish
+for its second-best line, which drives Great-move detection — set it back to 1
+for faster analysis if you don't need those badges, or raise `movetimeMs` for
+even deeper evals at the cost of review time (roughly `moves × movetimeMs`).
+
+Want an even stronger engine? The bundled `stockfish-18-lite-single.js` is the
+single-threaded, small-NNUE build (required for iOS Safari, which historically
+lacked SharedArrayBuffer). The same npm package ships a heavier full-net build
+(`stockfish-18-single.js`); swap the two file names in
+`scripts/copy-stockfish.mjs` and `src/services/engine/stockfishEngine.ts` to
+use it. True multi-threaded search would additionally require serving the app
+with COOP/COEP headers to enable SharedArrayBuffer.
 
 The application code in this repository is released under the MIT License
 (see `LICENSE`). The bundled Stockfish engine remains under its own GPLv3 license.

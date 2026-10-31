@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { classifyMove, isMissedWin } from './classify';
+import { classifyMove, isGreatMove, isMissedWin } from './classify';
 
 describe('classifyMove', () => {
   test('the engine move is best', () => {
@@ -13,6 +13,20 @@ describe('classifyMove', () => {
     expect(classifyMove(7, false)).toBe('inaccuracy');
     expect(classifyMove(15, false)).toBe('mistake');
     expect(classifyMove(25, false)).toBe('blunder');
+  });
+});
+
+describe('isGreatMove', () => {
+  test('best move with a clearly worse runner-up is Great', () => {
+    expect(isGreatMove(70, 55)).toBe(true);
+  });
+
+  test('a close runner-up is not Great', () => {
+    expect(isGreatMove(60, 57)).toBe(false);
+  });
+
+  test('no second-best line is never Great', () => {
+    expect(isGreatMove(90, null)).toBe(false);
   });
 });
 
