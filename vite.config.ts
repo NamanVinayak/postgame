@@ -26,7 +26,7 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,svg,wasm}'],
         // The single-threaded Stockfish wasm is ~7 MB; precache it for offline analysis.
         maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
-        navigateFallbackDenylist: [/^\/stockfish\//],
+        navigateFallbackDenylist: [/\/stockfish\//],
       },
     }),
   ],

@@ -2,7 +2,7 @@ import type { Evaluation, Engine, SecondBestLine } from './types';
 import { ENGINE } from '../../constants';
 
 /** Served from public/stockfish/ (copied there by scripts/copy-stockfish.mjs). */
-const ENGINE_URL = '/stockfish/stockfish-18-lite-single.js';
+const ENGINE_URL = `${import.meta.env.BASE_URL}stockfish/stockfish-18-lite-single.js`;
 
 export interface StockfishEngine extends Engine {
   /** Release the underlying Web Worker. */
