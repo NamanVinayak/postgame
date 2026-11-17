@@ -10,6 +10,8 @@ export interface ReasonCtx {
   bestMoveSan: string | null;
   classification: Classification;
   isMissedWin: boolean;
+  /** Chess.com-style Miss: the best move would have gained a clear edge. */
+  isMiss: boolean;
   /** The engine's best line from fenBefore was a forced mate the player missed. */
   bestLeadsToMate: boolean;
   /** The engine's best reply for the opponent from fenAfter, in SAN. */
@@ -66,6 +68,7 @@ function detectHanging(ctx: ReasonCtx): string | null {
 export function explainMistake(ctx: ReasonCtx): string | null {
   const notable =
     ctx.isMissedWin ||
+    ctx.isMiss ||
     ctx.classification === 'blunder' ||
     ctx.classification === 'mistake';
   if (!notable) return null;
@@ -81,6 +84,11 @@ export function explainMistake(ctx: ReasonCtx): string | null {
     return best
       ? `You had a strong move here — ${best} kept your advantage.`
       : 'You had a strong move here.';
+  }
+  if (ctx.isMiss) {
+    return best
+      ? `You missed a chance to seize the advantage — ${best} was much stronger.`
+      : 'You missed a chance to seize the advantage.';
   }
 
   const hanging = detectHanging(ctx);

@@ -8,6 +8,7 @@ const base: ReasonCtx = {
   bestMoveSan: 'e4',
   classification: 'blunder',
   isMissedWin: false,
+  isMiss: false,
   bestLeadsToMate: false,
   opponentReplySan: null,
 };
@@ -27,6 +28,12 @@ describe('explainMistake', () => {
   test('missed win (not mate)', () => {
     const r = explainMistake({ ...base, isMissedWin: true, bestLeadsToMate: false });
     expect(r).toMatch(/strong move|advantage/i);
+    expect(r).toContain('e4');
+  });
+
+  test('miss names the stronger move', () => {
+    const r = explainMistake({ ...base, isMiss: true, classification: 'mistake' });
+    expect(r).toMatch(/missed a chance/i);
     expect(r).toContain('e4');
   });
 

@@ -1,5 +1,5 @@
 import type { AnalysisResult, Color } from '../types';
-import { CLASS_META } from './classificationMeta';
+import { CLASS_META, MISS_META, MISSED_WIN_META } from './classificationMeta';
 
 interface Props {
   analysis: AnalysisResult;
@@ -21,6 +21,7 @@ export function AccuracySummary({ analysis, myColor }: Props) {
   const oppAccuracy = myColor === 'white' ? analysis.blackAccuracy : analysis.whiteAccuracy;
   const myCounts = analysis.counts[myColor];
   const oppCounts = analysis.counts[myColor === 'white' ? 'black' : 'white'];
+  const oppColor: Color = myColor === 'white' ? 'black' : 'white';
 
   return (
     <div className="accuracy-summary">
@@ -46,6 +47,24 @@ export function AccuracySummary({ analysis, myColor }: Props) {
             </span>
           </div>
         ))}
+        <div className="count-row">
+          <span className="count-you" style={{ color: MISSED_WIN_META.color }}>
+            {analysis.missedWins[myColor]}
+          </span>
+          <span className="count-label">Missed wins</span>
+          <span className="count-opp" style={{ color: MISSED_WIN_META.color }}>
+            {analysis.missedWins[oppColor]}
+          </span>
+        </div>
+        <div className="count-row">
+          <span className="count-you" style={{ color: MISS_META.color }}>
+            {analysis.misses[myColor]}
+          </span>
+          <span className="count-label">Misses</span>
+          <span className="count-opp" style={{ color: MISS_META.color }}>
+            {analysis.misses[oppColor]}
+          </span>
+        </div>
       </div>
     </div>
   );

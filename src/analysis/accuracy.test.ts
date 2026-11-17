@@ -33,12 +33,17 @@ describe('calibrateToChesscom', () => {
     expect(calibrateToChesscom(0)).toBe(0);
     expect(calibrateToChesscom(100)).toBe(100);
   });
-  test('compresses toward the Chess.com sample (83.3 -> ~73.4)', () => {
-    expect(calibrateToChesscom(83.3)).toBeCloseTo(73.4, 0);
+  test('nudges gently toward Chess.com (83.3 -> ~81.8)', () => {
+    expect(calibrateToChesscom(83.3)).toBeCloseTo(81.8, 0);
   });
   test('always lowers or holds a raw score (never inflates)', () => {
     for (const raw of [40, 60, 75, 90, 95]) {
       expect(calibrateToChesscom(raw)).toBeLessThanOrEqual(raw);
+    }
+  });
+  test('the nudge stays small — no more than ~3 points in the 70-95 band', () => {
+    for (const raw of [70, 80, 90, 95]) {
+      expect(raw - calibrateToChesscom(raw)).toBeLessThan(3.5);
     }
   });
 });

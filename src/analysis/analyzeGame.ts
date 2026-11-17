@@ -1,11 +1,12 @@
 import { Chess } from 'chess.js';
 import type { AnalysisResult, Classification, Color, PlyAnalysis } from '../types';
-import { ENGINE, GREAT_MOVE, SCHEMA_VERSION } from '../constants';
+import { BEST_LINE_MAX_MOVES, ENGINE, GREAT_MOVE, SCHEMA_VERSION } from '../constants';
 import type { Engine, Evaluation } from '../services/engine/types';
 import { evalToWinPct } from './winPct';
-import { classifyMove, isGreatMove, isMissedWin } from './classify';
+import { classifyMove, isGreatMove, isMiss, isMissedWin } from './classify';
 import { gameAccuracies, moveAccuracy } from './accuracy';
 import { explainMistake } from './reasons';
+import { uciLineToSan } from './lines';
 
 export interface ProgressCb {
   (done: number, total: number): void;
@@ -17,6 +18,8 @@ function negate(evaluation: Evaluation): Evaluation {
     mate: evaluation.mate === null ? null : -evaluation.mate,
     bestMoveUci: evaluation.bestMoveUci,
     secondBest: evaluation.secondBest,
+    // The PV is a sequence of moves — flipping the POV doesn't change it.
+    pvUci: evaluation.pvUci,
   };
 }
 
@@ -59,6 +62,8 @@ export async function analyzeGame(
 
   const plies: PlyAnalysis[] = [];
   const counts = { white: emptyCounts(), black: emptyCounts() };
+  const missedWins = { white: 0, black: 0 };
+  const misses = { white: 0, black: 0 };
   // White win% at each position: index 0 is the start, index i+1 is after ply i.
   const winPctWhiteSeq: number[] = [];
 
@@ -113,11 +118,36 @@ export async function analyzeGame(
         classification = 'great';
       }
     }
-    const missed = isMissedWin(winBestMover, winPlayedMover);
+    // Missed opportunities: only when the mover had a real choice and didn't
+    // play the engine's move. A missed win takes precedence over a miss —
+    // a move is never both.
+    const couldChoose = !forced && !playedIsBest;
+    const missed = couldChoose && isMissedWin(winBestMover, winPlayedMover);
+    const miss = couldChoose && !missed && isMiss(winBestMover, winPlayedMover);
     const accuracy = moveAccuracy(winBestMover, winPlayedMover);
 
-    const bestMoveSan = playedIsBest ? null : uciToSan(fenBefore, evalBefore.bestMoveUci);
+    // No "better" move to show when the played move was (near-)optimal:
+    // the engine's top choice differing by <2 win% is search noise, and
+    // showing "Better: …" next to a Best badge contradicts the badge.
+    const bestMoveSan =
+      playedIsBest || classification === 'best' || classification === 'great'
+        ? null
+        : uciToSan(fenBefore, evalBefore.bestMoveUci);
     const opponentReplySan = uciToSan(fenAfter, evalAfterOpp.bestMoveUci);
+
+    // The engine's best line from the position before this move, for the line
+    // explorer. Stored in both SAN (display) and UCI (board stepping). A line
+    // that fails to replay (stale/illegal PV) is dropped, not shown wrong.
+    let bestLineUci: string[] | null = null;
+    let bestLineSan: string[] | null = null;
+    if (evalBefore.pvUci && evalBefore.pvUci.length > 0) {
+      const sliced = evalBefore.pvUci.slice(0, BEST_LINE_MAX_MOVES);
+      const san = uciLineToSan(fenBefore, sliced);
+      if (san) {
+        bestLineUci = sliced;
+        bestLineSan = san;
+      }
+    }
 
     // Store the after-position eval from White's point of view.
     const whitePov = moverColor === 'white' ? evalAfterMover : evalAfterOpp;
@@ -137,6 +167,7 @@ export async function analyzeGame(
       bestMoveSan,
       classification,
       isMissedWin: missed,
+      isMiss: miss,
       bestLeadsToMate: evalBefore.mate !== null && evalBefore.mate > 0,
       opponentReplySan,
     });
@@ -150,12 +181,17 @@ export async function analyzeGame(
       winPctWhite,
       classification,
       isMissedWin: missed,
+      isMiss: miss,
       bestMoveSan,
+      bestLineSan,
+      bestLineUci,
       reason,
       accuracy,
     });
 
     counts[moverColor][classification]++;
+    if (missed) missedWins[moverColor]++;
+    if (miss) misses[moverColor]++;
     onProgress?.(i + 1, total);
   }
 
@@ -171,6 +207,8 @@ export async function analyzeGame(
     whiteAccuracy: white,
     blackAccuracy: black,
     counts,
+    missedWins,
+    misses,
     createdAt: Date.now(),
   };
 }

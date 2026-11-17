@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { PlyAnalysis } from '../types';
-import { CLASS_META } from './classificationMeta';
+import { CLASS_META, MISS_META, MISSED_WIN_META } from './classificationMeta';
 
 interface Props {
   plies: PlyAnalysis[];
@@ -38,14 +38,25 @@ export function MoveList({ plies, currentIndex, onSelect }: Props) {
   function cell(p: PlyAnalysis | undefined, index: number) {
     if (!p) return <span className="move-cell empty" />;
     const active = currentIndex === index + 1;
-    const meta = CLASS_META[p.classification];
+    // Missed opportunities override the classification dot: a missed win (or
+    // miss) is the thing to notice, even when the move is also a blunder.
+    const meta = p.isMissedWin
+      ? MISSED_WIN_META
+      : p.isMiss
+        ? MISS_META
+        : CLASS_META[p.classification];
     return (
       <button
         ref={active ? activeRef : undefined}
         className={`move-cell${active ? ' active' : ''}`}
         onClick={() => onSelect(index + 1)}
+        aria-label={`${p.moveSan} — ${meta.label}`}
       >
-        <span className="move-dot" style={{ backgroundColor: meta.color }} />
+        <span
+          className="move-dot"
+          style={{ backgroundColor: meta.color }}
+          data-testid={`move-dot-${index}`}
+        />
         {p.moveSan}
       </button>
     );

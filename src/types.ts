@@ -41,8 +41,22 @@ export interface PlyAnalysis {
   winPctWhite: number;
   classification: Classification;
   isMissedWin: boolean;
+  /**
+   * Chess.com-style "Miss": the best move would have gained a clear advantage
+   * but the played move let the opportunity pass (position left level or
+   * worse). Distinct from a missed win — the position was not already won.
+   */
+  isMiss: boolean;
   /** Engine's preferred move in SAN (null when the played move was best). */
   bestMoveSan: string | null;
+  /**
+   * The engine's best line from the position *before* this move, in SAN, up
+   * to BEST_LINE_MAX_MOVES long. Null when the engine reported no PV.
+   * The first move is `bestMoveSan`.
+   */
+  bestLineSan: string[] | null;
+  /** Same line in UCI, used to step the board through the line. */
+  bestLineUci: string[] | null;
   /** Plain-English explanation, only for notable mistakes (else null). */
   reason: string | null;
   /** Accuracy of this single move, mover's POV, 0..100. */
@@ -59,5 +73,9 @@ export interface AnalysisResult {
     white: Record<Classification, number>;
     black: Record<Classification, number>;
   };
+  /** Missed wins per color (a move can be both a blunder and a missed win). */
+  missedWins: { white: number; black: number };
+  /** Misses ("missed opportunities") per color. */
+  misses: { white: number; black: number };
   createdAt: number;
 }

@@ -13,6 +13,8 @@ const analysis: AnalysisResult = {
     white: { great: 0, best: 10, good: 5, inaccuracy: 1, mistake: 0, blunder: 0 },
     black: { great: 0, best: 4, good: 6, inaccuracy: 2, mistake: 1, blunder: 3 },
   },
+  missedWins: { white: 0, black: 1 },
+  misses: { white: 1, black: 2 },
   createdAt: 0,
 };
 
@@ -25,5 +27,8 @@ describe('AccuracySummary', () => {
     // Black had 3 blunders (shown on the "you" side).
     expect(screen.getByText('3')).toBeInTheDocument();
     expect(screen.getByText('Blunders')).toBeInTheDocument();
+    // Missed wins and misses get their own rows.
+    expect(screen.getByText('Missed wins')).toBeInTheDocument();
+    expect(screen.getByText('Misses')).toBeInTheDocument();
   });
 });

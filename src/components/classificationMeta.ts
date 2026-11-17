@@ -12,6 +12,9 @@ export const CLASS_META: Record<Classification, { label: string; color: string }
 
 export const MISSED_WIN_META = { label: 'Missed win', color: '#c77dff' };
 
+/** Missed opportunity (Chess.com's "Miss"): pink, distinct from missed-win purple. */
+export const MISS_META = { label: 'Miss', color: '#e879a8' };
+
 /** Compact glyph shown on the board square for each move (Chess.com/Lichess-style). */
 export const CLASS_GLYPH: Record<Classification, string> = {
   great: '!',
@@ -23,3 +26,5 @@ export const CLASS_GLYPH: Record<Classification, string> = {
 };
 
 export const MISSED_WIN_GLYPH = '✕';
+
+export const MISS_GLYPH = 'Ø';

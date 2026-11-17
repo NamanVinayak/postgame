@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { DELTA, SCHEMA_VERSION, MISSED_WIN } from './constants';
+import { DELTA, MISS, SCHEMA_VERSION, MISSED_WIN } from './constants';
 
 describe('constants', () => {
   test('classification thresholds are ordered', () => {
@@ -15,5 +15,11 @@ describe('constants', () => {
 
   test('missed-win drop is below the winning threshold', () => {
     expect(MISSED_WIN.dropTo).toBeLessThan(MISSED_WIN.winningWinPct);
+  });
+
+  test('miss thresholds are ordered', () => {
+    expect(MISS.dropTo).toBeLessThan(MISS.gainWinPct);
+    expect(MISS.gainWinPct).toBeLessThan(MISSED_WIN.winningWinPct);
+    expect(MISS.minSwing).toBeGreaterThan(0);
   });
 });

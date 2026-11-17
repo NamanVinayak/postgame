@@ -26,6 +26,14 @@ what happened.
   worse, it gets its own teal `!` badge.
 - Positions with exactly one legal move are always rated **Best** — nothing was
   decided there.
+- **Missed wins and misses**: when you had a winning move (or a clear edge)
+  and let it slip, the move gets its own badge (purple ✕ for a missed win,
+  pink Ø for a miss) in the move list, on the board, and in the summary
+  counts — instead of being buried as just another blunder.
+- **Best-line explorer**: on any analyzed move, tap **Explore line** to see
+  the engine's best line and step through it on the board, move by move, to
+  see what would have happened — then **Back to game** returns to the actual
+  position. Tap any move in the line to jump straight to it.
 - Analyzed games are cached, so reopening one is instant.
 
 ## How it works (no backend, no keys, no cost)
@@ -70,10 +78,10 @@ Testing Library.
 src/
   services/chesscom.ts        Fetch + normalize Chess.com games
   services/storage.ts         localStorage username + IndexedDB analysis cache
-  services/engine/            Stockfish Web Worker engine
-  analysis/                   win% · classification · accuracy · reasons · analyzeGame
+  services/engine/            Stockfish Web Worker engine + UCI line parsing
+  analysis/                   win% · classification · accuracy · reasons · analyzeGame · lines
   hooks/                      connected user, recent games
-  components/                 Connect / GameList / Review screens
+  components/                 Connect / GameList / Review screens (+ line explorer)
 docs/superpowers/             Design spec and implementation plan
 ```
 
@@ -96,10 +104,18 @@ tests (`npm test`).
 
 Accuracy uses the public **Lichess** method (centipawns → win%, per-move
 accuracy, volatility-weighted + harmonic aggregation), then a small calibration
-curve nudges the result toward **Chess.com's** stricter CAPS2 band — Chess.com's
-own formula is proprietary and factors player rating, so these are an
-approximation, not their exact numbers. The calibration (`ACCURACY_CALIBRATION_GAMMA`
-in `src/constants.ts`) is fit to observed Chess.com samples and can be refined.
+curve nudges the result toward **Chess.com's** CAPS2 band — Chess.com's own
+formula is proprietary and factors player rating, so these are an approximation,
+not their exact numbers. The calibration (`ACCURACY_CALIBRATION_GAMMA` in
+`src/constants.ts`, currently 1.1) is fit to 12 paired samples — real Chess.com
+blitz games re-analyzed with Stockfish and compared against Chess.com's own
+accuracy numbers from the public API (mean error +0.4 points, MAE 3.4; the
+residual scatter of ±4 points is irreducible without knowing CAPS2's internals).
+A fixed-depth-18 check (approximating the lite single-threaded engine's
+shallower search) moved the same 12 raw scores by +0.9 points on average
+(range −1.5 to +3.6) — small and bidirectional, not a systematic penalty —
+so no separate engine-noise correction is applied. See the comment on the
+constant for the re-fit recipe.
 
 Each distinct position is searched exactly once: the eval of the position
 after a move is re-used as the next move's "before" eval, which halves the

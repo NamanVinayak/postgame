@@ -15,7 +15,15 @@ class ScriptedEngine implements Engine {
   }
   async evaluate(): Promise<Evaluation> {
     this.calls++;
-    return this.queue.shift() ?? { cp: 0, mate: null, bestMoveUci: null, secondBest: null };
+    return (
+      this.queue.shift() ?? {
+        cp: 0,
+        mate: null,
+        bestMoveUci: null,
+        secondBest: null,
+        pvUci: null,
+      }
+    );
   }
 }
 
@@ -24,6 +32,7 @@ const cp = (v: number): Evaluation => ({
   mate: null,
   bestMoveUci: null,
   secondBest: null,
+  pvUci: null,
 });
 
 // 6-ply game; black's move at ply index 3 is scripted as a blunder.
@@ -72,6 +81,7 @@ describe('analyzeGame', () => {
         mate: null,
         bestMoveUci: 'e2e4', // matches the played 1. e4
         secondBest: { cp: -50, mate: null, bestMoveUci: 'd2d4' }, // ~10 win% worse
+        pvUci: ['e2e4', 'e7e5', 'g1f3'],
       },
       cp(0),
       cp(0),
@@ -84,5 +94,83 @@ describe('analyzeGame', () => {
     const result = await analyzeGame(PGN, engine, 'game-2');
     expect(result.plies[0].classification).toBe('great');
     expect(result.counts.white.great).toBe(1);
+    // The best line is stored in both SAN (display) and UCI (board stepping).
+    expect(result.plies[0].bestLineSan).toEqual(['e4', 'e5', 'Nf3']);
+    expect(result.plies[0].bestLineUci).toEqual(['e2e4', 'e7e5', 'g1f3']);
+  });
+
+  test('a blunder from a winning position is also a missed win', async () => {
+    // P3 (before Nc6, black POV) has black clearly winning (cp 400 ≈ 81 win%);
+    // after Nc6 white is better instead (cp 400 white POV), so black threw a win.
+    const engine = new ScriptedEngine([
+      cp(0),
+      cp(0),
+      cp(0),
+      cp(400),
+      cp(400),
+      cp(-400),
+      cp(0),
+    ]);
+
+    const result = await analyzeGame(PGN, engine, 'game-3');
+    expect(result.plies[3].classification).toBe('blunder');
+    expect(result.plies[3].isMissedWin).toBe(true);
+    expect(result.plies[3].isMiss).toBe(false);
+    expect(result.plies[3].reason).toMatch(/strong move|advantage/i);
+    expect(result.missedWins.black).toBe(1);
+    expect(result.missedWins.white).toBe(0);
+  });
+
+  test('a blunder that lets a clear edge slip is a miss, not a missed win', async () => {
+    // P3 (before Nc6, black POV) cp 200 ≈ 68 win% — a clear edge, not a win;
+    // after Nc6 white is better (cp 200 white POV), so black missed the edge.
+    const engine = new ScriptedEngine([
+      cp(0),
+      cp(0),
+      cp(0),
+      cp(200),
+      cp(200),
+      cp(-200),
+      cp(0),
+    ]);
+
+    const result = await analyzeGame(PGN, engine, 'game-4');
+    expect(result.plies[3].isMiss).toBe(true);
+    expect(result.plies[3].isMissedWin).toBe(false);
+    expect(result.plies[3].reason).toMatch(/missed a chance/i);
+    expect(result.misses.black).toBe(1);
+    expect(result.misses.white).toBe(0);
+  });
+
+  test('an illegal PV is dropped instead of stored', async () => {
+    const engine = new ScriptedEngine([
+      { ...cp(0), pvUci: ['e2e4', 'e2e5'] }, // e2e5 is illegal after e4
+      cp(0),
+      cp(0),
+      cp(0),
+      cp(0),
+      cp(0),
+      cp(0),
+    ]);
+    const result = await analyzeGame(PGN, engine, 'game-5');
+    expect(result.plies[0].bestLineSan).toBeNull();
+    expect(result.plies[0].bestLineUci).toBeNull();
+  });
+
+  test('a best-classified move shows no "better" move', async () => {
+    // The engine prefers d4, but e4 loses nothing (same eval) — the
+    // difference is search noise, so no "Better: d4" label.
+    const engine = new ScriptedEngine([
+      { cp: 30, mate: null, bestMoveUci: 'd2d4', secondBest: null, pvUci: ['d2d4'] },
+      { cp: -30, mate: null, bestMoveUci: null, secondBest: null, pvUci: null },
+      cp(0),
+      cp(0),
+      cp(0),
+      cp(0),
+      cp(0),
+    ]);
+    const result = await analyzeGame(PGN, engine, 'game-6');
+    expect(result.plies[0].classification).toBe('best');
+    expect(result.plies[0].bestMoveSan).toBeNull();
   });
 });

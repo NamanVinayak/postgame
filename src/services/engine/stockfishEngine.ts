@@ -1,4 +1,5 @@
 import type { Evaluation, Engine, SecondBestLine } from './types';
+import { parseBestmove, parseUciInfo } from './uci';
 import { ENGINE } from '../../constants';
 
 /** Served from public/stockfish/ (copied there by scripts/copy-stockfish.mjs). */
@@ -53,32 +54,23 @@ export function createStockfishEngine(): StockfishEngine {
 
   function search(fen: string, movetimeMs: number): Promise<Evaluation> {
     return new Promise((resolve) => {
-      let bestMoveUci: string | null = null;
       /** Latest score for each MultiPV tier: [1] is best, [2] the second-best line. */
       const tiers: Record<
         number,
-        { cp: number | null; mate: number | null; pv?: string[] }
+        { cp: number | null; mate: number | null; pv?: string[] | null }
       > = {};
 
       const handler = (event: MessageEvent) => {
         for (const line of lines(event.data)) {
           if (!line) continue;
-          if (line.startsWith('info') && line.includes(' score ')) {
-            const m = /score (cp|mate) (-?\d+)/.exec(line);
-            const mpv = /multipv (\d+)/.exec(line);
-            if (!m) continue;
-            const tier = mpv ? parseInt(mpv[1], 10) : 1;
-            const entry: { cp: number | null; mate: number | null; pv?: string[] } = {
-              cp: m[1] === 'cp' ? parseInt(m[2], 10) : null,
-              mate: m[1] === 'mate' ? parseInt(m[2], 10) : null,
-            };
-            const pv = / pv ([a-z0-9- ]+)/.exec(line);
-            if (pv) entry.pv = pv[1].split(' ');
-            tiers[tier] = entry;
-          } else if (line.startsWith('bestmove')) {
-            const parts = line.trim().split(/\s+/);
+          const info = parseUciInfo(line);
+          if (info) {
+            tiers[info.tier] = { cp: info.cp, mate: info.mate, pv: info.pv };
+            continue;
+          }
+          if (line.startsWith('bestmove')) {
             const top = tiers[1] ?? { cp: null, mate: null };
-            bestMoveUci = parts[1] && parts[1] !== '(none)' ? parts[1] : null;
+            const bestMoveUci = parseBestmove(line);
             let secondBest: SecondBestLine | null = null;
             if (tiers[2]) {
               secondBest = {
@@ -88,7 +80,13 @@ export function createStockfishEngine(): StockfishEngine {
               };
             }
             worker.removeEventListener('message', handler);
-            resolve({ cp: top.cp, mate: top.mate, bestMoveUci, secondBest });
+            resolve({
+              cp: top.cp,
+              mate: top.mate,
+              bestMoveUci,
+              secondBest,
+              pvUci: top.pv ?? null,
+            });
             return;
           }
         }

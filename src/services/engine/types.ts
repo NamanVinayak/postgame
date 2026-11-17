@@ -17,6 +17,12 @@ export interface Evaluation {
   bestMoveUci: string | null;
   /** The MultiPV line behind the engine's best move — used for "only move" (Great) detection. */
   secondBest: SecondBestLine | null;
+  /**
+   * Principal variation (the engine's best line) in UCI, from the searched
+   * position — the first move is `bestMoveUci`. Null when the engine reported
+   * no PV (e.g. mate/stalemate positions, or an engine that omits it).
+   */
+  pvUci: string[] | null;
 }
 
 export interface Engine {

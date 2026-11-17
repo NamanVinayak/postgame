@@ -13,7 +13,10 @@ function ply(winPctWhite: number): PlyAnalysis {
     winPctWhite,
     classification: 'best',
     isMissedWin: false,
+    isMiss: false,
     bestMoveSan: null,
+    bestLineSan: null,
+    bestLineUci: null,
     reason: null,
     accuracy: 100,
   };

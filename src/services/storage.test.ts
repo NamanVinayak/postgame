@@ -22,6 +22,8 @@ function makeResult(gameId: string, schemaVersion = SCHEMA_VERSION): AnalysisRes
       white: { great: 0, best: 1, good: 0, inaccuracy: 0, mistake: 0, blunder: 0 },
       black: { great: 0, best: 0, good: 1, inaccuracy: 0, mistake: 0, blunder: 0 },
     },
+    missedWins: { white: 0, black: 0 },
+    misses: { white: 0, black: 0 },
     createdAt: 123,
   };
 }

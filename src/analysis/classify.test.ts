@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { classifyMove, isGreatMove, isMissedWin } from './classify';
+import { classifyMove, isGreatMove, isMiss, isMissedWin } from './classify';
 
 describe('classifyMove', () => {
   test('the engine move is best', () => {
@@ -38,6 +38,24 @@ describe('isMissedWin', () => {
     expect(isMissedWin(60, 50)).toBe(false);
   });
   test('winning but keeping most of it is not a missed win', () => {
-    expect(isMissedWin(80, 60)).toBe(false);
+    expect(isMissedWin(80, 65)).toBe(false);
+  });
+  test('dropping to just inside the equal band still counts', () => {
+    expect(isMissedWin(90, 60)).toBe(true);
+  });
+});
+
+describe('isMiss', () => {
+  test('best move gains a clear edge, played move leaves it level', () => {
+    expect(isMiss(70, 50)).toBe(true);
+  });
+  test('too small a swing is not a miss', () => {
+    expect(isMiss(66, 54)).toBe(false);
+  });
+  test('best move not reaching a clear edge is not a miss', () => {
+    expect(isMiss(60, 40)).toBe(false);
+  });
+  test('played move keeping an edge is not a miss', () => {
+    expect(isMiss(70, 60)).toBe(false);
   });
 });

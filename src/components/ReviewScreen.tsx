@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Chess } from 'chess.js';
 import type { AnalysisResult, GameSummary } from '../types';
 import { analyzeGame } from '../analysis/analyzeGame';
+import { lineChips, linePositions } from '../analysis/lines';
 import { createStockfishEngine } from '../services/engine/stockfishEngine';
 import { getAnalysis, saveAnalysis } from '../services/storage';
 import { Board } from './Board';
@@ -13,6 +14,8 @@ import { AccuracySummary } from './AccuracySummary';
 import {
   CLASS_GLYPH,
   CLASS_META,
+  MISS_GLYPH,
+  MISS_META,
   MISSED_WIN_GLYPH,
   MISSED_WIN_META,
 } from './classificationMeta';
@@ -37,6 +40,10 @@ export function ReviewScreen({ game, myUsername, onBack }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [index, setIndex] = useState(0);
   const [checkedCache, setCheckedCache] = useState(false);
+  // Line exploration: which ply's best line is on the board, and how far
+  // along it (step 0 = the position before the ply's move, step k = after
+  // the first k line moves). Null means the board shows the actual game.
+  const [exploring, setExploring] = useState<{ ply: number; step: number } | null>(null);
   const runningRef = useRef(false);
 
   const { positions, moveTos } = useMemo(() => {
@@ -85,6 +92,7 @@ export function ReviewScreen({ game, myUsername, onBack }: Props) {
     setAnalysis(null);
     setError(null);
     setCheckedCache(false);
+    setExploring(null);
     let active = true;
     getAnalysis(game.id).then((cached) => {
       if (!active) return;
@@ -100,27 +108,82 @@ export function ReviewScreen({ game, myUsername, onBack }: Props) {
     };
   }, [game.id, runAnalysis]);
 
+  const exitExploration = useCallback(() => setExploring(null), []);
+
   const seek = useCallback(
-    (next: number) => setIndex(Math.max(0, Math.min(maxIndex, next))),
+    (next: number) => {
+      setExploring(null);
+      setIndex(Math.max(0, Math.min(maxIndex, next)));
+    },
     [maxIndex],
+  );
+
+  const selectedPly = analysis && index >= 1 ? analysis.plies[index - 1] : null;
+  const exploringPly =
+    exploring && analysis ? (analysis.plies[exploring.ply] ?? null) : null;
+
+  // FENs along the explored line (index 0 = the position before the ply's
+  // move). Null when there is no line to explore.
+  const lineFens = useMemo(() => {
+    if (!exploringPly?.bestLineUci || !exploring) return null;
+    return linePositions(positions[exploring.ply], exploringPly.bestLineUci);
+  }, [exploring, exploringPly, positions]);
+
+  const stepLine = useCallback(
+    (next: number) => {
+      const max = exploringPly?.bestLineUci?.length ?? 0;
+      setExploring((cur) =>
+        cur ? { ...cur, step: Math.max(0, Math.min(max, next)) } : cur,
+      );
+    },
+    [exploringPly],
+  );
+
+  const startExploring = useCallback(
+    (ply: number, step: number) => {
+      const plyAnalysis = analysis?.plies[ply];
+      if (!plyAnalysis?.bestLineUci?.length) return;
+      setIndex(ply + 1);
+      setExploring({ ply, step: Math.max(0, Math.min(plyAnalysis.bestLineUci.length, step)) });
+    },
+    [analysis],
   );
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // While exploring a line, the arrow keys walk the line, not the game.
+      if (exploring) {
+        if (e.key === 'ArrowLeft') stepLine(exploring.step - 1);
+        if (e.key === 'ArrowRight') stepLine(exploring.step + 1);
+        return;
+      }
       if (e.key === 'ArrowLeft') seek(index - 1);
       if (e.key === 'ArrowRight') seek(index + 1);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [index, seek]);
+  }, [index, seek, exploring, stepLine]);
 
-  const selectedPly = analysis && index >= 1 ? analysis.plies[index - 1] : null;
   const badge =
     selectedPly &&
-    (selectedPly.isMissedWin ? MISSED_WIN_META : CLASS_META[selectedPly.classification]);
+    (selectedPly.isMissedWin
+      ? MISSED_WIN_META
+      : selectedPly.isMiss
+        ? MISS_META
+        : CLASS_META[selectedPly.classification]);
   const progressPct = progress.total ? Math.round((progress.done / progress.total) * 100) : 0;
 
-  const currentWinPctWhite = selectedPly ? selectedPly.winPctWhite : 50;
+  // While exploring, the eval bar shows the win% at the start of the line
+  // (the line's own positions have no stored evals).
+  const currentWinPctWhite = exploring
+    ? exploring.ply === 0
+      ? 50
+      : (analysis?.plies[exploring.ply - 1].winPctWhite ?? 50)
+    : selectedPly
+      ? selectedPly.winPctWhite
+      : 50;
+  const boardFen =
+    exploring && lineFens ? lineFens[exploring.step] : positions[index];
   const opponentColor: typeof game.myColor = game.myColor === 'white' ? 'black' : 'white';
 
   return (
@@ -147,20 +210,24 @@ export function ReviewScreen({ game, myUsername, onBack }: Props) {
         <div className="board-row">
           <EvalBar winPctWhite={currentWinPctWhite} orientation={game.myColor} />
           <div className="board-area">
-            <Board fen={positions[index]} orientation={game.myColor} />
-            {selectedPly && index >= 1 && moveTos[index - 1] && (
+            <Board fen={boardFen} orientation={game.myColor} />
+            {!exploring && selectedPly && index >= 1 && moveTos[index - 1] && (
               <MoveBadge
                 square={moveTos[index - 1]}
                 orientation={game.myColor}
                 glyph={
                   selectedPly.isMissedWin
                     ? MISSED_WIN_GLYPH
-                    : CLASS_GLYPH[selectedPly.classification]
+                    : selectedPly.isMiss
+                      ? MISS_GLYPH
+                      : CLASS_GLYPH[selectedPly.classification]
                 }
                 color={
                   selectedPly.isMissedWin
                     ? MISSED_WIN_META.color
-                    : CLASS_META[selectedPly.classification].color
+                    : selectedPly.isMiss
+                      ? MISS_META.color
+                      : CLASS_META[selectedPly.classification].color
                 }
               />
             )}
@@ -174,6 +241,18 @@ export function ReviewScreen({ game, myUsername, onBack }: Props) {
           <span className="pl-you">You</span>
         </div>
       </div>
+
+      {exploring && exploringPly && (
+        <div className="exploring-banner" role="status">
+          <span>
+            Best line instead of {exploringPly.moveSan} · move {exploring.step} of{' '}
+            {exploringPly.bestLineUci?.length ?? 0}
+          </span>
+          <button className="link-button" onClick={exitExploration}>
+            Back to game
+          </button>
+        </div>
+      )}
 
       <div className="nav-controls">
         <button onClick={() => seek(0)} disabled={index === 0} aria-label="First move">
@@ -242,6 +321,61 @@ export function ReviewScreen({ game, myUsername, onBack }: Props) {
                 )}
               </div>
               {selectedPly.reason && <p className="reason">{selectedPly.reason}</p>}
+              {selectedPly.bestLineSan && selectedPly.bestLineUci && (
+                <div className="best-line">
+                  <div className="best-line-head">
+                    <span className="best-line-label">Best line</span>
+                    {exploring?.ply === selectedPly.ply ? (
+                      <button className="link-button" onClick={exitExploration}>
+                        Back to game
+                      </button>
+                    ) : (
+                      <button
+                        className="explore-button"
+                        onClick={() => startExploring(selectedPly.ply, 1)}
+                      >
+                        Explore line
+                      </button>
+                    )}
+                  </div>
+                  <div className="line-chips">
+                    {lineChips(selectedPly.bestLineSan, selectedPly.ply).map((chip) => (
+                      <button
+                        key={chip.step}
+                        className={`line-chip${
+                          exploring?.ply === selectedPly.ply && exploring.step === chip.step
+                            ? ' active'
+                            : ''
+                        }`}
+                        onClick={() => startExploring(selectedPly.ply, chip.step)}
+                      >
+                        {chip.label}
+                      </button>
+                    ))}
+                  </div>
+                  {exploring?.ply === selectedPly.ply && (
+                    <div className="line-controls">
+                      <button
+                        onClick={() => stepLine(exploring.step - 1)}
+                        disabled={exploring.step === 0}
+                        aria-label="Previous line move"
+                      >
+                        ‹
+                      </button>
+                      <span className="line-counter">
+                        {exploring.step} / {selectedPly.bestLineUci.length}
+                      </span>
+                      <button
+                        onClick={() => stepLine(exploring.step + 1)}
+                        disabled={exploring.step === selectedPly.bestLineUci.length}
+                        aria-label="Next line move"
+                      >
+                        ›
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
