@@ -157,6 +157,65 @@ describe('analyzeGame', () => {
     expect(result.plies[0].bestLineUci).toBeNull();
   });
 
+  test('delivering checkmate scores the mating move 100, not 0', async () => {
+    // Fool's mate: 1. f3 e5 2. g4 Qh4#. The engine reports the final position
+    // as mate 0 (side to move is mated); negating that to the mover's POV is
+    // a no-op (-0 === 0), so the old code read black's win% after Qh4# as 0
+    // and the harmonic mean collapsed black's whole-game accuracy into the
+    // 50s despite winning. Terminal positions are now detected with chess.js.
+    const foolsMate = '[Event "x"]\n\n1. f3 e5 2. g4 Qh4# 0-1';
+    const mate = (m: number, bestMoveUci: string | null = null): Evaluation => ({
+      cp: null,
+      mate: m,
+      bestMoveUci,
+      secondBest: null,
+      pvUci: null,
+    });
+    const engine = new ScriptedEngine([
+      cp(0), // P0: start (white POV)
+      cp(0), // P1: after f3 (black POV)
+      cp(0), // P2: after e5 (white POV)
+      mate(1, 'd8h4'), // P3: after g4 (black POV) — mate in 1, played move is best
+      mate(0), // P4: terminal — must never be consumed (skipped, not searched)
+    ]);
+
+    const result = await analyzeGame(foolsMate, engine, 'game-mate');
+    const matingMove = result.plies[3];
+    expect(matingMove.moveSan).toBe('Qh4#');
+    expect(matingMove.classification).toBe('best');
+    expect(matingMove.accuracy).toBeGreaterThan(99);
+    // Black's two moves are both (near-)perfect: no accuracy collapse.
+    expect(result.blackAccuracy).toBeGreaterThan(85);
+    // The final position's White win% is 0 (black mated white), as the graph shows.
+    expect(matingMove.winPctWhite).toBe(0);
+    expect(matingMove.mate).toBe(0);
+    expect(matingMove.evalCp).toBeNull();
+    // The terminal position is never searched — the mate-0 entry stays queued.
+    expect(engine.calls).toBe(4);
+  });
+
+  test('a stalemate ending collapses neither side\'s accuracy', async () => {
+    // The shortest stalemate game (10 moves): 10. Qe6 leaves black stalemated.
+    // All evals are equal (cp 0), so every move should score ~100.
+    const stalemate =
+      '[Event "x"]\n\n1. e3 a5 2. Qh5 Ra6 3. Qxa5 h5 4. Qxc7 Rah6 5. h4 f6 ' +
+      '6. Qxd7+ Kf7 7. Qxb7 Qd3 8. Qxb8 Qh7 9. Qxc8 Kg6 10. Qe6 1/2-1/2';
+    const engine = new ScriptedEngine([]);
+
+    const result = await analyzeGame(stalemate, engine, 'game-stalemate');
+    expect(result.plies).toHaveLength(19);
+    const last = result.plies[18];
+    expect(last.moveSan).toBe('Qe6');
+    expect(last.accuracy).toBeGreaterThan(99);
+    expect(last.winPctWhite).toBe(50);
+    expect(last.mate).toBeNull();
+    expect(last.evalCp).toBe(0);
+    expect(result.whiteAccuracy).toBeGreaterThan(90);
+    expect(result.blackAccuracy).toBeGreaterThan(90);
+    // 19 plies = 20 positions, minus the terminal one, which is never searched.
+    expect(engine.calls).toBe(19);
+  });
+
   test('a best-classified move shows no "better" move', async () => {
     // The engine prefers d4, but e4 loses nothing (same eval) — the
     // difference is search noise, so no "Better: d4" label.

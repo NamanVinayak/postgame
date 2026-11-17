@@ -1,5 +1,5 @@
 /** Bump when the cached AnalysisResult shape or scoring changes (invalidates old caches). */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 /**
  * Nudge a raw (Lichess-style) accuracy toward Chess.com's CAPS2 band.
@@ -11,6 +11,14 @@ export const SCHEMA_VERSION = 6;
  * Least-squares fit on log-log scale: 1.124, rounded to 1.1. With it, the
  * mean error vs Chess.com is +0.4 points (MAE 3.4); the previous value of
  * 1.7 — fit to a single game — averaged -5.5 points (MAE 6.1, worst -15.8).
+ *
+ * Re-fit Nov 16, 2026 after the checkmate fix (terminal positions are no
+ * longer scored via the engine's mate-0 eval): least-squares on the same 12
+ * samples gives 1.150 (bias +0.1, MAE 3.9). Kept at 1.1 — the sample's
+ * decisive games all ended by resignation, so the original fit was never
+ * contaminated by the bug; the 1.124 → 1.150 shift is run-to-run engine
+ * variance, and 1.1 has the lower MAE on the new run (3.7 vs 3.9). If a
+ * future sample includes mate endings, re-fit and prefer the new value.
  *
  * Limits, stated plainly: the raw Lichess score already tracks Chess.com
  * within ~±3 MAE, and the residual scatter (SD ~4.3) is irreducible from

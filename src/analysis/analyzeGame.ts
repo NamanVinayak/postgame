@@ -12,6 +12,12 @@ export interface ProgressCb {
   (done: number, total: number): void;
 }
 
+/**
+ * Flip an evaluation to the other side's point of view. Note mate 0 (the
+ * side to move is already mated) must never reach here: -0 === 0, so
+ * negating it is a no-op and the winner's win% would read 0 instead of 100.
+ * Terminal positions are handled directly in analyzeGame instead.
+ */
 function negate(evaluation: Evaluation): Evaluation {
   return {
     cp: evaluation.cp === null ? null : -evaluation.cp,
@@ -88,12 +94,41 @@ export async function analyzeGame(
     const moverColor: Color = move.color === 'w' ? 'white' : 'black';
 
     const evalBefore = await evaluatePosition(fenBefore);
-    const evalAfterOpp = await evaluatePosition(fenAfter);
-    const evalAfterMover = negate(evalAfterOpp);
 
-    // Win% from the mover's point of view.
+    // Terminal after-positions are detected with chess.js, not trusted to the
+    // engine: the engine reports a mated position as mate 0 (side to move is
+    // mated), and negating that to the mover's POV is a no-op (-0 === 0), so
+    // the winner's win% after delivering mate would read 0 instead of 100 —
+    // and the harmonic mean would collapse their whole-game accuracy. There
+    // is also no legal reply to search for, so skipping the eval saves one
+    // movetime per terminal game.
+    const afterBoard = new Chess(fenAfter);
+    const isCheckmate = afterBoard.isCheckmate();
+    const isStalemate = afterBoard.isStalemate();
+
+    // Win% from the mover's point of view, plus the stored White-POV eval.
+    let winPlayedMover: number;
+    let winPctWhite: number;
+    let storedMate: number | null;
+    let storedCp: number | null;
+    let opponentReplySan: string | null = null;
+    if (isCheckmate || isStalemate) {
+      winPlayedMover = isCheckmate ? 100 : 50;
+      winPctWhite = isCheckmate ? (moverColor === 'white' ? 100 : 0) : 50;
+      storedMate = isCheckmate ? 0 : null;
+      storedCp = isCheckmate ? null : 0;
+    } else {
+      const evalAfterOpp = await evaluatePosition(fenAfter);
+      const evalAfterMover = negate(evalAfterOpp);
+      winPlayedMover = evalToWinPct(evalAfterMover.cp, evalAfterMover.mate);
+      const whitePov = moverColor === 'white' ? evalAfterMover : evalAfterOpp;
+      winPctWhite = evalToWinPct(whitePov.cp, whitePov.mate);
+      storedMate = whitePov.mate;
+      storedCp = whitePov.mate === null ? whitePov.cp : null;
+      opponentReplySan = uciToSan(fenAfter, evalAfterOpp.bestMoveUci);
+    }
+
     const winBestMover = evalToWinPct(evalBefore.cp, evalBefore.mate);
-    const winPlayedMover = evalToWinPct(evalAfterMover.cp, evalAfterMover.mate);
     const winPctLost = Math.max(0, winBestMover - winPlayedMover);
 
     const playedIsBest =
@@ -133,7 +168,6 @@ export async function analyzeGame(
       playedIsBest || classification === 'best' || classification === 'great'
         ? null
         : uciToSan(fenBefore, evalBefore.bestMoveUci);
-    const opponentReplySan = uciToSan(fenAfter, evalAfterOpp.bestMoveUci);
 
     // The engine's best line from the position before this move, for the line
     // explorer. Stored in both SAN (display) and UCI (board stepping). A line
@@ -148,10 +182,6 @@ export async function analyzeGame(
         bestLineSan = san;
       }
     }
-
-    // Store the after-position eval from White's point of view.
-    const whitePov = moverColor === 'white' ? evalAfterMover : evalAfterOpp;
-    const winPctWhite = evalToWinPct(whitePov.cp, whitePov.mate);
 
     // Build the White-POV win% sequence: the start (before ply 0), then each after-move.
     if (i === 0) {
@@ -176,8 +206,8 @@ export async function analyzeGame(
       ply: i,
       moveSan: move.san,
       color: moverColor,
-      evalCp: whitePov.mate === null ? whitePov.cp : null,
-      mate: whitePov.mate,
+      evalCp: storedCp,
+      mate: storedMate,
       winPctWhite,
       classification,
       isMissedWin: missed,

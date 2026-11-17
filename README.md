@@ -111,6 +111,9 @@ not their exact numbers. The calibration (`ACCURACY_CALIBRATION_GAMMA` in
 blitz games re-analyzed with Stockfish and compared against Chess.com's own
 accuracy numbers from the public API (mean error +0.4 points, MAE 3.4; the
 residual scatter of ±4 points is irreducible without knowing CAPS2's internals).
+A Nov 16, 2026 re-fit after the checkmate fix (least-squares 1.150 on the same
+sample) confirmed 1.1: the sample's decisive games all ended by resignation, so
+the original fit was never contaminated by the bug.
 A fixed-depth-18 check (approximating the lite single-threaded engine's
 shallower search) moved the same 12 raw scores by +0.9 points on average
 (range −1.5 to +3.6) — small and bidirectional, not a systematic penalty —
