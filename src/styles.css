@@ -651,3 +651,142 @@ input:focus {
   font-variant-numeric: tabular-nums;
   font-size: 0.85rem;
 }
+
+/* ---------- Train (private coaching drills) ---------- */
+.train-link {
+  font-weight: 700;
+}
+.list-footer {
+  margin-top: 28px;
+  text-align: center;
+}
+.link-button.quiet {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.coach-link-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+}
+.coach-link-form label {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.primary-button,
+.secondary-button {
+  flex: 1;
+  min-height: 48px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  font-size: 1rem;
+  font-weight: 700;
+}
+.primary-button {
+  background: var(--green);
+  color: #14210a;
+  border: none;
+}
+.secondary-button {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+}
+.train-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 0 6px;
+}
+.train-header .brand-sm {
+  margin: 0;
+}
+.train-count {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.train-idea {
+  min-height: 1.4em;
+  margin: 4px 0 10px;
+  color: var(--green);
+  font-weight: 600;
+}
+.drill-text {
+  margin-top: 14px;
+  font-size: 1.05rem;
+  line-height: 1.5;
+}
+.drill-text p {
+  margin: 0 0 10px;
+}
+.drill-good {
+  color: var(--win);
+}
+.drill-bad {
+  color: var(--loss);
+  font-weight: 600;
+}
+.drill-cue {
+  color: var(--muted);
+}
+.drill-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+.train-foot,
+.train-muted {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.train-foot {
+  margin-top: 18px;
+  text-align: center;
+}
+.train-start {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  margin: 12px 0;
+  padding: 18px;
+  border-radius: 14px;
+  border: none;
+  background: var(--green);
+  color: #14210a;
+  text-align: left;
+}
+.train-start:disabled {
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: default;
+}
+.train-start-title {
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+.train-start-sub {
+  font-size: 0.9rem;
+}
+.train-openings {
+  list-style: none;
+  margin: 16px 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+}
+.train-openings li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.train-tools {
+  margin-top: 16px;
+}
+.train-unlink {
+  color: var(--muted);
+}

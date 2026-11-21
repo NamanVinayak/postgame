@@ -97,6 +97,9 @@ export const WINPCT_K = 0.00368208;
 /** How many recent games to show in the list. */
 export const RECENT_GAME_COUNT = 20;
 
+/** Board square colours, shared by the review board and the training board. */
+export const BOARD_SQUARE_COLORS = { dark: '#6f7d5a', light: '#e9e6d6' };
+
 /** User-facing copy kept in one place. */
 export const COPY = {
   appName: 'Postgame',

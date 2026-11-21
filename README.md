@@ -51,6 +51,18 @@ Everything runs in your browser:
 It's an installable **PWA**: on iPhone, open it in Safari and "Add to Home
 Screen" for an app-like icon and full-screen launch.
 
+### Train (private coaching drills)
+
+An optional **Train** section appears only when a *coach pack* is linked —
+open the app with `?coach=<https URL of a pack>` or paste the link under
+"Have a coach link?". A coach pack is a JSON file of positions from your own
+games where you keep choosing the wrong move, each with the moves to accept,
+how your usual move gets punished, and a plain-language reason. Drills come
+back on a spaced schedule (1, 3, 7, 16, 35 days; a miss starts over), at most
+10 per session. The pack and your progress stay on your device (IndexedDB);
+nothing is sent anywhere. Without a linked pack the app behaves exactly as
+before. The pack format is defined in `src/training/pack.ts`.
+
 ## Run it
 
 ```bash
