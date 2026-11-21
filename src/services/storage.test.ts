@@ -1,13 +1,53 @@
 import { beforeEach, describe, expect, test } from 'vitest';
 import {
+  clearCachedPack,
   clearUsername,
+  getAllProgress,
   getAnalysis,
   getAnalysisSummaries,
   getAnalyzedIds,
+  getCachedPack,
+  getTrainingDays,
   getUsername,
+  markTrainedToday,
   saveAnalysis,
+  saveCachedPack,
+  saveProgress,
   setUsername,
 } from './storage';
+import type { CoachPack } from '../training/pack';
+
+describe('training storage', () => {
+  const pack: CoachPack = { schema: 1, generated: '2026-11-21', openings: [], drills: [] };
+
+  test('coach pack round-trip and clear', async () => {
+    await saveCachedPack(pack);
+    expect(await getCachedPack()).toEqual(pack);
+    await clearCachedPack();
+    expect(await getCachedPack()).toBeNull();
+  });
+
+  test('progress round-trip, keyed by drill id', async () => {
+    await saveProgress({ drillId: 'a', box: 1, dueAt: 10, lapses: 0, reviews: 1, lastPositionIndex: 0 });
+    await saveProgress({ drillId: 'a', box: 2, dueAt: 20, lapses: 0, reviews: 2, lastPositionIndex: 0 });
+    const all = await getAllProgress();
+    expect(all.size).toBe(1);
+    expect(all.get('a')?.box).toBe(2);
+  });
+
+  test('training days: one entry per day, newest kept, at most 30', () => {
+    localStorage.clear();
+    const day = 86_400_000;
+    const start = new Date(2026, 9, 1, 12).getTime();
+    markTrainedToday(start);
+    markTrainedToday(start + 1000);
+    expect(getTrainingDays()).toHaveLength(1);
+    for (let i = 1; i <= 40; i++) markTrainedToday(start + i * day);
+    const days = getTrainingDays();
+    expect(days).toHaveLength(30);
+    expect(days[days.length - 1]).toBe('2026-11-10');
+  });
+});
 import type { AnalysisResult } from '../types';
 import { SCHEMA_VERSION } from '../constants';
 

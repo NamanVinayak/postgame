@@ -1,5 +1,6 @@
 import { Chessboard } from 'react-chessboard';
 import type { Color } from '../types';
+import { BOARD_SQUARE_COLORS } from '../constants';
 
 interface Props {
   fen: string;
@@ -18,8 +19,8 @@ export function Board({ fen, orientation }: Props) {
           allowDragging: false,
           showNotation: true,
           animationDurationInMs: 150,
-          darkSquareStyle: { backgroundColor: '#6f7d5a' },
-          lightSquareStyle: { backgroundColor: '#e9e6d6' },
+          darkSquareStyle: { backgroundColor: BOARD_SQUARE_COLORS.dark },
+          lightSquareStyle: { backgroundColor: BOARD_SQUARE_COLORS.light },
         }}
       />
     </div>

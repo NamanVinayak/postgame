@@ -1,17 +1,25 @@
+import { useState } from 'react';
 import { useRecentGames } from '../hooks/useRecentGames';
 import { GameRow } from './GameRow';
+import { CoachLinkForm } from './train/CoachLinkForm';
 import { COPY } from '../constants';
+import { TRAIN_COPY } from '../training/copy';
 import type { GameSummary } from '../types';
 
 interface Props {
   username: string;
   onSelect: (game: GameSummary) => void;
   onSwitchAccount: () => void;
+  /** Present only when a coach pack is linked. */
+  onTrain?: () => void;
+  /** Present when no coach pack is linked yet; returns false for an unusable link. */
+  onLinkCoach?: (url: string) => boolean;
 }
 
-export function GameList({ username, onSelect, onSwitchAccount }: Props) {
+export function GameList({ username, onSelect, onSwitchAccount, onTrain, onLinkCoach }: Props) {
   const { games, accuracyById, status, statusMessage, refresh } = useRecentGames(username);
   const firstLoading = status === 'loading' && games.length === 0;
+  const [linking, setLinking] = useState(false);
 
   return (
     <div className="app-shell">
@@ -21,6 +29,11 @@ export function GameList({ username, onSelect, onSwitchAccount }: Props) {
           <p className="connected">@{username}</p>
         </div>
         <div className="header-actions">
+          {onTrain && (
+            <button className="link-button train-link" onClick={onTrain}>
+              {TRAIN_COPY.train}
+            </button>
+          )}
           <button className="link-button" onClick={refresh} disabled={status === 'loading'}>
             Refresh
           </button>
@@ -48,6 +61,18 @@ export function GameList({ username, onSelect, onSwitchAccount }: Props) {
             </li>
           ))}
         </ul>
+      )}
+
+      {!onTrain && onLinkCoach && (
+        <footer className="list-footer">
+          {linking ? (
+            <CoachLinkForm onLink={onLinkCoach} />
+          ) : (
+            <button className="link-button quiet" onClick={() => setLinking(true)}>
+              {TRAIN_COPY.haveLink}
+            </button>
+          )}
+        </footer>
       )}
     </div>
   );
