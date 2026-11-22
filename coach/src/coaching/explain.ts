@@ -16,8 +16,11 @@ import type { PositionFacts } from './positionFacts';
 
 export type { PositionFacts } from './positionFacts';
 
-/** A played move in the same UCI form the engine uses ("e7e8q"). */
-function uciOf(m: { from: string; to: string; promotion?: string }): string {
+/**
+ * A move in the same UCI form the engine uses ("e7e8q"): from, to and the promotion letter;
+ * castling is the king's two-square move ("e1g1"). The board widget builds moves the same way.
+ */
+export function uciOf(m: { from: string; to: string; promotion?: string }): string {
   return m.from + m.to + (m.promotion ?? '');
 }
 
@@ -79,7 +82,7 @@ export function positionFacts(c: CachedGame, ply: number): PositionFacts {
 }
 
 /** The engine's line from `fen` in SAN (at most BEST_LINE_MAX_MOVES), or null when there is none. */
-function lineSan(fen: string, e: Evaluation): string[] | null {
+export function lineSan(fen: string, e: Evaluation): string[] | null {
   const pv = e.pvUci && e.pvUci.length > 0 ? e.pvUci : e.bestMoveUci ? [e.bestMoveUci] : null;
   return pv ? uciLineToSan(fen, pv.slice(0, BEST_LINE_MAX_MOVES)) : null;
 }
@@ -162,7 +165,7 @@ export async function deepPositionFacts(c: CachedGame, ply: number, engine: Disp
 }
 
 /** The named accounts' replayable games, with their plies. */
-function ownGames(d: Diagnosis, games: CachedGame[]): { c: CachedGame; plies: PlyFact[] }[] {
+export function ownGames(d: Diagnosis, games: CachedGame[]): { c: CachedGame; plies: PlyFact[] }[] {
   const named = new Set(d.usernames.map((u) => u.toLowerCase()));
   const out: { c: CachedGame; plies: PlyFact[] }[] = [];
   for (const c of games) {
@@ -214,6 +217,9 @@ export function repeatedRefs(d: Diagnosis, games: CachedGame[]): ({ gameId: stri
 }
 
 const SERIOUS: ReadonlySet<Classification> = new Set<Classification>(['mistake', 'blunder']);
+
+/** A mistake or a blunder: what the diagnosis counts as a serious mistake. */
+export const isSerious = (c: Classification): boolean => SERIOUS.has(c);
 
 /** True when the quick analysis called a move a mistake or blunder but the deep check does not. */
 export function deepDisagrees(quick: Classification, deep: Classification): boolean {

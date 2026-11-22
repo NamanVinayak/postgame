@@ -5,12 +5,16 @@ import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { Chess } from 'chess.js';
+import { evalToWinPct } from '../../../src/analysis/winPct';
 import type { Engine, Evaluation } from '../../../src/services/engine/types';
 import type { Classification, TimeClass } from '../../../src/types';
 import { writeCached, type CachedGame } from '../analysis/cache';
 import { memoryGuarded } from '../analysis/memoryPressure';
 import { createRunner, type EngineFactory, type Runner } from '../analysis/runner';
+import { loadStudent } from '../coaching/student';
 import { diagnose, type AreaFinding, type Diagnosis } from '../diagnosis/diagnose';
+import { positionKey } from '../diagnosis/repeated';
 import { fixtureGame } from '../diagnosis/testGames';
 import { createDisplayEngine, type DisplayEngine } from '../engine/displayEngine';
 import type { CoachGame, GameSource } from '../sources/types';
@@ -501,9 +505,32 @@ describe('coach_me prompt', () => {
       "say 'not enough data' plainly",
       'one focus at a time',
       'no help during a live game',
+      // spec §6b rules
+      'never reveal the answer before i try',
+      'after the answer, name the thinking error first, then show the refutation',
+      'three to five positions of the same pattern',
+      'one rule of thumb',
     ]) {
       expect(text.toLowerCase()).toContain(rule);
     }
+  });
+
+  it('walks through the session steps 1–8 and only names tools that exist', async () => {
+    const client = await connect(deps(createRunner(NO_ENGINE, source([]))));
+    const p = await client.getPrompt({ name: 'coach_me', arguments: { username: 'alice' } });
+    const text = p.messages.map((m) => (m.content.type === 'text' ? m.content.text : '')).join('\n');
+    for (let step = 1; step <= 8; step++) expect(text).toMatch(new RegExp(`^${step}\\. `, 'm'));
+    for (const step of ['Report card', 'Warm-up', "Today's theme", 'try first', 'Practice', 'rule of thumb', 'Homework', 'next session']) {
+      expect(text).toContain(step);
+    }
+    // Several accounts are passed as `accounts`, asked once, with a stated default.
+    expect(text).toContain('accounts [{ username, maxGames }');
+    expect(text).toContain('the last 300 blitz games');
+    const { tools } = await client.listTools();
+    const names = new Set(tools.map((t) => t.name));
+    const named = [...new Set(text.match(/coach_[a-z_]+/g) ?? [])];
+    expect(named.length).toBeGreaterThan(5);
+    for (const n of named) expect(names, n).toContain(n);
   });
 });
 
@@ -611,5 +638,252 @@ describe('diagnosisText', () => {
     expect(text).toContain('…and 2 more positions like these, in the structured data.');
     expect(text.match(/^\d+\. \[focus\]/gm)).toHaveLength(1);
     expect(view.repeated).toHaveLength(12);
+  });
+});
+
+// ---- the coaching session (C1b) ----
+
+/** A deep engine keyed by position (board, side to move, castling, en passant), recording every search. */
+function keyedEngine(byFen: Record<string, Evaluation | Evaluation[]>): Engine & { searched: string[] } {
+  const byKey = new Map(Object.entries(byFen).map(([fen, e]) => [positionKey(fen), e]));
+  const searched: string[] = [];
+  return {
+    searched,
+    async evaluate(fen) {
+      searched.push(fen);
+      const e = byKey.get(positionKey(fen));
+      if (!e) throw new Error(`unexpected search ${fen}`);
+      // A list gives a different answer on each search, like 2-thread Stockfish choosing between equal moves.
+      return Array.isArray(e) ? e[(searched.filter((f) => positionKey(f) === positionKey(fen)).length - 1) % e.length] : e;
+    },
+  };
+}
+
+const fenAt = (sans: string[], n: number) => {
+  const b = new Chess();
+  for (const s of sans.slice(0, n)) b.move(s);
+  return b.fen();
+};
+// Ply 7 of the Italian fixture: Black's ...d5 after 4.Ng5 (the quick check called it a mistake).
+const FEN_BEFORE_7 = fenAt(SANS, 7);
+const FEN_AFTER_7 = fenAt(SANS, 8);
+const QE7_BEFORE: Evaluation = { cp: -50, mate: null, bestMoveUci: 'd8e7', secondBest: null, pvUci: ['d8e7'] };
+const D5_AFTER: Evaluation = { cp: 250, mate: null, bestMoveUci: 'e4d5', secondBest: null, pvUci: ['e4d5', 'c6a5'] };
+// The deep check clears ply 5: ...Nf6 is its own first choice.
+const NF6_BEST: Evaluation = { cp: 20, mate: null, bestMoveUci: 'g8f6', secondBest: null, pvUci: ['g8f6', 'f3g5'] };
+const NF6_HOLDS: Evaluation = { cp: -20, mate: null, bestMoveUci: 'f3g5', secondBest: null, pvUci: ['f3g5', 'd7d5'] };
+const H6_AFTER: Evaluation = { cp: 120, mate: null, bestMoveUci: 'd2d4', secondBest: null, pvUci: ['d2d4', 'e5d4'] };
+
+/** The answer and everything engine-made about it, none of which may show before the player tries. */
+const ANSWER_BITS = ['Bc5', 'f8c5', 'Nf6', 'g8f6', 'Be7', 'Ng5', 'f3g5', 'Qe7', 'd8e7', '%', 'mistake', 'blunder', 'best'];
+
+/** The italian fixture as cached, diagnosed with the opening as its focus (both of Black's moves there are mistakes). */
+function italianLesson(engine: Engine) {
+  const c = cachedItalian();
+  writeCached(c);
+  const runner = createRunner(NO_ENGINE, source([c.game]));
+  const openingFocus: typeof diagnose = (g, u, b) => ({ ...diagnose(g, u, b), focus: { kind: 'area', area: 'opening' } });
+  return { c, runner, deps: { ...deps(runner, engine), diagnose: openingFocus } };
+}
+
+describe('coach_ask_position', () => {
+  it('askPositionToolLeaksNoAnswer: the question carries the board only; text and structuredContent hold no answer', async () => {
+    writeCached(cachedItalian());
+    const engine = deepEngine(BC5_BEFORE, NG5_AFTER);
+    const client = await connect(deps(createRunner(NO_ENGINE, source([])), engine));
+    const { tools } = await client.listTools();
+    for (const name of ['coach_ask_position', 'coach_check_move', 'coach_report']) {
+      const t = tools.find((x) => x.name === name);
+      expect((t?._meta as { ui?: { resourceUri?: string } } | undefined)?.ui?.resourceUri).toBe(BOARD_URI);
+    }
+
+    const res = await call(client, 'coach_ask_position', { gameId: GAME_ID, ply: 5 });
+    expect(res.isError).toBeFalsy();
+    expect(res.structuredContent).toEqual({
+      kind: 'question',
+      fen: FEN_BEFORE_5,
+      orientation: 'black',
+      gameId: GAME_ID,
+      ply: 5,
+      prompt: 'What would you play here, and what were you worried about?',
+    });
+    const text = textOf(res);
+    expect(text).toContain(FEN_BEFORE_5);
+    expect(text).toContain('coach_check_move');
+    for (const bit of ANSWER_BITS) {
+      expect(text).not.toContain(bit);
+      expect(JSON.stringify(res.structuredContent)).not.toContain(bit);
+    }
+    // It was deep-checked before being asked (and only asked because the move really was a mistake).
+    expect(engine.searched).toEqual([FEN_BEFORE_5, FEN_AFTER_5]);
+  });
+
+  it('skipsPositionsThatAreNotRealMistakes: picks the next practice position, passing over one the deep check clears', async () => {
+    const engine = keyedEngine({
+      [FEN_BEFORE_5]: NF6_BEST,
+      [FEN_AFTER_5]: NF6_HOLDS,
+      [FEN_BEFORE_7]: QE7_BEFORE,
+      [FEN_AFTER_7]: D5_AFTER,
+    });
+    const { runner, deps: d } = italianLesson(engine);
+    const client = await connect(d);
+    const none = await call(client, 'coach_ask_position', {});
+    expect(none.isError).toBe(true);
+    expect(textOf(none)).toMatch(/call coach_report/);
+
+    expect((await call(client, 'coach_report', ALICE)).isError).toBeFalsy();
+    const res = await call(client, 'coach_ask_position', {});
+    expect(res.isError).toBeFalsy();
+    // Ply 5 (the worse loss) comes first, but the deep check clears it; ply 7 is a real mistake.
+    expect(res.structuredContent).toMatchObject({ kind: 'question', gameId: GAME_ID, ply: 7, fen: FEN_BEFORE_7 });
+    for (const bit of ['Qe7', 'd8e7', 'd5', '%']) expect(textOf(res)).not.toContain(bit);
+
+    // Both are now used up for this lesson.
+    const done = await call(client, 'coach_ask_position', {});
+    expect(done.isError).toBe(true);
+    expect(textOf(done)).toMatch(/No more practice positions/);
+
+    // Asked by reference, a position the deep check clears is refused without naming a move.
+    const cleared = await call(client, 'coach_ask_position', { gameId: GAME_ID, ply: 5 });
+    expect(cleared.isError).toBe(true);
+    expect(textOf(cleared)).toMatch(/wasn't a real mistake/);
+    for (const bit of ['Nf6', 'g8f6', 'Ng5']) expect(textOf(cleared)).not.toContain(bit);
+    await runner.close();
+  });
+});
+
+describe('coach_check_move', () => {
+  it('checkMoveAlwaysPassesAttempt: the answer board shows the try against the best move, and the try is recorded', async () => {
+    const engine = keyedEngine({ [FEN_BEFORE_5]: BC5_BEFORE, [FEN_AFTER_5]: NG5_AFTER, [new Chess(FEN_BEFORE_5).move('h6').after]: H6_AFTER });
+    writeCached(cachedItalian());
+    const client = await connect(deps(createRunner(NO_ENGINE, source([])), engine));
+
+    const wrong = await call(client, 'coach_check_move', { gameId: GAME_ID, ply: 5, moveSan: 'h6' });
+    expect(wrong.isError).toBeFalsy();
+    expect(wrong.structuredContent).toMatchObject({
+      kind: 'answer',
+      fen: FEN_BEFORE_5,
+      playedUci: 'h7h6',
+      playedSan: 'h6',
+      bestUci: 'f8c5',
+      bestSan: 'Bc5',
+      winAfter: null, // the facts' win-after belongs to the game move, not the try
+      correct: false,
+    });
+    expect(String(wrong.structuredContent?.caption)).toContain('You tried h6; the best move is Bc5.');
+    const text = textOf(wrong);
+    const keeps = /Your move keeps about (\d+)% win chance; the best move keeps (\d+)%\./.exec(text);
+    expect(keeps).not.toBeNull();
+    expect(Number(keeps![1])).toBe(Math.round(100 - evalToWinPct(120, null)));
+    expect(Number(keeps![2])).toBe(Math.round(evalToWinPct(80, null)));
+    expect(text).toContain("The opponent's strongest reply to h6: 4. d4 exd4.");
+    expect(text).toContain('In the game the player chose Nf6');
+    expect(text).not.toContain('Be7'); // the quick search's best move never shows
+
+    const best = await call(client, 'coach_check_move', { gameId: GAME_ID, ply: 5, moveSan: 'Bc5' });
+    expect(best.structuredContent).toMatchObject({ kind: 'answer', playedUci: 'f8c5', playedSan: 'Bc5', bestUci: null, correct: true, lossPts: 0 });
+    expect(String(best.structuredContent?.caption)).toContain('Bc5 is the best move here.');
+    expect(textOf(best)).toContain("Right: that is Stockfish's best move.");
+
+    // Recorded in the student file of the game's account (no player named yet), one session.
+    const s = loadStudent('alice');
+    expect(s.sessions).toHaveLength(1);
+    expect(s.sessions[0].tried.map((t) => [t.moveSan, t.correct])).toEqual([
+      ['h6', false],
+      ['Bc5', true],
+    ]);
+    expect(textOf(best)).toContain("Recorded in alice's student file: 1 of 2 right this session.");
+  });
+
+  it('refuses an illegal move plainly and records nothing', async () => {
+    writeCached(cachedItalian());
+    const engine = deepEngine(BC5_BEFORE, NG5_AFTER);
+    const client = await connect(deps(createRunner(NO_ENGINE, source([])), engine));
+    const res = await call(client, 'coach_check_move', { gameId: GAME_ID, ply: 5, moveSan: 'Ke2' });
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toMatch(/not a legal move/);
+    expect(engine.searched).toEqual([]);
+    expect(loadStudent('alice').sessions).toEqual([]);
+  });
+
+  it('deepFactsCachedPerFen: one search per position for the whole session, even across games and changing answers', async () => {
+    // Game B reaches the same board as the fixture by another move order (different move counters).
+    const B_SANS = ['Nf3', 'Nc6', 'e4', 'e5', 'Bc4', 'Nf6', 'Ng5', 'd5'];
+    const B_ID = 'https://example.test/game/live/43';
+    const b = fixtureGame({ id: B_ID, sans: B_SANS, wins: [52, 50, 54, 52, 55, 66, 60, 70], myColor: 'black' });
+    writeCached(b);
+    writeCached(cachedItalian());
+    expect(fenAt(B_SANS, 5)).not.toBe(FEN_BEFORE_5);
+    expect(positionKey(fenAt(B_SANS, 5))).toBe(positionKey(FEN_BEFORE_5));
+    // A second search of the position would name Be7 instead of Bc5.
+    const engine = keyedEngine({
+      [FEN_BEFORE_5]: [BC5_BEFORE, { cp: 80, mate: null, bestMoveUci: 'f8e7', secondBest: null, pvUci: ['f8e7'] }],
+      [FEN_AFTER_5]: NG5_AFTER,
+    });
+    const client = await connect(deps(createRunner(NO_ENGINE, source([])), engine));
+    const explainA = await call(client, 'coach_explain_position', { gameId: GAME_ID, ply: 5 });
+    const askB = await call(client, 'coach_ask_position', { gameId: B_ID, ply: 5 });
+    const checkB = await call(client, 'coach_check_move', { gameId: B_ID, ply: 5, moveSan: 'Nf6' });
+    expect(explainA.structuredContent).toMatchObject({ bestSan: 'Bc5' });
+    expect(askB.isError).toBeFalsy();
+    expect(checkB.structuredContent).toMatchObject({ bestSan: 'Bc5', bestUci: 'f8c5' });
+    expect(engine.searched.map(positionKey)).toEqual([positionKey(FEN_BEFORE_5), positionKey(FEN_AFTER_5)]);
+  });
+});
+
+describe('coach_report', () => {
+  it('shows the report card (board view) with a text table, and refuses plainly while games are analysed', async () => {
+    const c = cachedGame('https://example.test/game/r1', 'alice');
+    const client = await connect(deps(createRunner(NO_ENGINE, source([c.game]))));
+    const res = await call(client, 'coach_report', ALICE);
+    expect(res.isError).toBeFalsy();
+    expect(res.structuredContent).toMatchObject({ kind: 'report', games: 1, timeClass: 'blitz', focus: null });
+    expect(res.structuredContent?.headline).toBe('From 1 blitz game: nothing stands out yet as a clear weak spot.');
+    expect(textOf(res)).toContain('| Area | Verdict |');
+    expect(textOf(res)).toMatch(/nothing to practise/);
+    const own = await call(client, 'coach_report', { ...ALICE, headline: 'One game is not enough to judge yet.' });
+    expect(own.structuredContent?.headline).toBe('One game is not enough to judge yet.');
+
+    const gate = deferred();
+    const runner = createRunner(() => gatedEngine(gate.promise), source([game(1), game(2)]));
+    const busy = await connect(deps(runner));
+    let r: CallResult | undefined;
+    try {
+      r = await call(busy, 'coach_report', ALICE);
+      expect(r.isError).toBe(true);
+      expect(textOf(r)).toMatch(/isn't ready yet.*analysed 0 of 2 games/s);
+    } finally {
+      gate.resolve();
+      const first = await call(busy, 'coach_diagnosis', ALICE);
+      await waitAll(runner, first);
+      await runner.close();
+    }
+  });
+});
+
+describe('student memory tools', () => {
+  it('coach_note_thinking and coach_student: this session is kept apart from "last time"', async () => {
+    writeCached(cachedItalian());
+    const engine = deepEngine(BC5_BEFORE, NG5_AFTER);
+    const first = await connect(deps(createRunner(NO_ENGINE, source([])), engine));
+    expect(textOf(await call(first, 'coach_student', { username: 'alice' }))).toMatch(/No earlier sessions for alice/);
+    await call(first, 'coach_check_move', { gameId: GAME_ID, ply: 5, moveSan: 'Nf6', username: 'Alice' });
+    const noted = await call(first, 'coach_note_thinking', { note: "didn't ask what Ng5 threatened", rule: 'Ask what their last move threatens.' });
+    expect(noted.isError).toBeFalsy();
+    expect(textOf(noted)).toContain("Saved in alice's student file: 1 thinking note this session; rule of thumb set.");
+    const same = textOf(await call(first, 'coach_student', {}));
+    expect(same).toMatch(/No earlier sessions/);
+    expect(same).toContain('This session so far: 0 of 1 right.');
+    expect(textOf(await call(first, 'coach_note_thinking', {}))).toMatch(/Give a note/);
+
+    // A new server session: the last one is now "last time".
+    const next = await connect(deps(createRunner(NO_ENGINE, source([])), engine));
+    const res = await call(next, 'coach_student', { username: 'alice' });
+    const text = textOf(res);
+    expect(text).toMatch(/^Last time \(\d{4}-\d{2}-\d{2}\): 0 of 1 right\./);
+    expect(text).toContain("didn't ask what Ng5 threatened");
+    expect(text).toContain('Rule of thumb: Ask what their last move threatens.');
+    expect(text).toContain(`Warm-up from last time: gameId ${GAME_ID}, ply 5.`);
+    expect(res.structuredContent).toMatchObject({ warmUp: { gameId: GAME_ID, ply: 5 }, last: { right: 0, tried: 1 } });
   });
 });

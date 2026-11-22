@@ -21,13 +21,24 @@ import type { TimeClass } from '../../../src/types';
 import { readCached, type CachedGame } from '../analysis/cache';
 import type { JobStatus, Query, Runner } from '../analysis/runner';
 import { deepDisagrees, deepPositionFacts, examplePositions, repeatedRefs, type PositionFacts } from '../coaching/explain';
-import { ENGINE_CFG, DISPLAY_CFG, SOURCE_CFG, STATS_CFG } from '../config';
+import { checkMove, firstTeachable, isTeachable, refKey, samePatternPositions, type CheckResult } from '../coaching/lesson';
+import {
+  addThinkingNote,
+  lastSessionSummary,
+  loadStudent,
+  recordAttempt,
+  saveStudent,
+  setRule,
+  startSession,
+  type StudentFile,
+} from '../coaching/student';
+import { ENGINE_CFG, DISPLAY_CFG, POSTGAME_URL, REPEAT_CFG, SOURCE_CFG, STATS_CFG } from '../config';
 import { AREA_NAMES, gamePlies } from '../diagnosis/areas';
 import { diagnose, type AreaFinding, type Diagnosis } from '../diagnosis/diagnose';
 import type { RepeatedPosition } from '../diagnosis/repeated';
-import { guardDisplayEngine, type DisplayEngine } from '../engine/displayEngine';
+import { guardDisplayEngine, memoDisplayEngine, type DisplayEngine, type SearchMemo } from '../engine/displayEngine';
 import { BOARD_URI } from './boardResource';
-import { toAnswerView } from './views';
+import { toAnswerView, toQuestionView, toReportView } from './views';
 
 /** Holds the one display engine (from `createDisplayEngine`), created on first use. */
 export interface DisplaySlot {
@@ -62,6 +73,13 @@ export interface CoachDeps {
 }
 
 const EXAMPLES = 3;
+/** Same-pattern candidates considered per coach_ask_position call. */
+const ASK_CANDIDATES = 12;
+/** Deep checks per coach_ask_position call (about 3 s each) before it gives up for now. */
+const ASK_MAX_CHECKS = 4;
+/** A student's session ends after this long without a tool writing to it. */
+const SESSION_IDLE_MS = 3 * 60 * 60 * 1000;
+const DEFAULT_QUESTION = 'What would you play here, and what were you worried about?';
 /** Diagnoses kept for repeat calls (one per query set and set of cached games). */
 const MEMO_SIZE = 8;
 /** Repeated positions written out in the text (the focus ones come first); all are in structuredContent. */
@@ -400,26 +418,146 @@ export function explainText(f: PositionFacts, disagrees: boolean): string {
   return lines.join('\n');
 }
 
-const COACH_ME_RULES = [
-  'Never state a move or evaluation that a tool did not return.',
-  'Always say how many games a finding rests on.',
-  "Say 'not enough data' plainly when a tool says so; never guess past it.",
-  'One focus at a time.',
-  'No help during a live game: if the user is playing right now, stop and offer to look after the game.',
-];
+// ---- the coaching session ----
 
-/** Placeholder session text (the full session flow is written in a later task). */
-export function coachMeText(username: string): string {
+/** The diagnosis focus in plain words, as the student file stores it. */
+export function focusLabel(d: Diagnosis): string | null {
+  const f = d.focus;
+  if (f?.kind === 'area') return AREA_NAMES[f.area];
+  if (f?.kind === 'repeated') {
+    return f.keys.length === 1 ? 'the position you keep getting wrong' : `the ${f.keys.length} positions you keep getting wrong`;
+  }
+  return null;
+}
+
+/** The report card's headline when the coach gives none: the focus, with the game count. */
+export function defaultHeadline(d: Diagnosis): string {
+  const games = plural(d.games, `${d.timeClass} game`);
+  const f = d.focus;
+  if (f?.kind === 'area') return `From ${games}: your clearest weak spot is ${AREA_NAMES[f.area]}.`;
+  if (f?.kind === 'repeated') {
+    const what = f.keys.length === 1 ? 'a position you keep getting wrong' : `${f.keys.length} positions you keep getting wrong`;
+    return `From ${games}: the thing to fix first is ${what}.`;
+  }
+  return `From ${games}: nothing stands out yet as a clear weak spot.`;
+}
+
+/**
+ * A question position as text: where it is and the position, never the game move, the best
+ * move, a win % or how the move was graded (try-first).
+ */
+export function questionText(f: PositionFacts, prompt: string): string {
+  const side = capitalize(f.mover);
   return [
-    `Coach me on my Chess.com games. My username is ${username}.`,
+    `Question position: gameId ${f.gameId}, ply ${f.ply} (move ${Math.floor(f.ply / 2) + 1}, ${side} to move; the player was ${side}).`,
+    `Position (FEN): ${f.fenBefore}`,
+    `The board shows the position only, with no hint. Ask: "${prompt}" Then wait for the player's move and reason, ` +
+      'without naming or hinting at any move or evaluation. Then call coach_check_move with this gameId and ply and their move.',
+  ].join('\n');
+}
+
+/** A scored attempt as text: the verdict, both win chances, the lines, and the game move's numbers labelled as such. */
+export function checkText(r: Extract<CheckResult, { legal: true }>, tally: string | null): string {
+  const f = r.facts;
+  const side = capitalize(f.mover);
+  const tried = r.attempt.moveSan;
+  const loss = Math.round(r.lossPts);
+  const bestSan = f.bestSan ?? f.playedSan;
+  const bestUci = f.bestUci ?? f.playedUci;
+  const lines = [
+    `Position: gameId ${f.gameId}, ply ${f.ply} (move ${Math.floor(f.ply / 2) + 1}, ${side} to move).`,
+    `The player tried ${tried} (${r.attempt.moveUci}).`,
+    r.isBest
+      ? "Right: that is Stockfish's best move."
+      : r.correct
+        ? `Right: it is within ${REPEAT_CFG.wrongLossPts}% of the best move (it loses about ${loss}%).`
+        : `Not right: it loses about ${loss}% win chance against the best move.`,
+    `Your move keeps about ${Math.round(r.attemptWin)}% win chance; the best move keeps ${Math.round(r.bestWin)}%.`,
+  ];
+  if (!r.isBest) lines.push(`Stockfish's best move: ${bestSan} (${bestUci}).`);
+  if (f.bestLineSan?.length) lines.push(`Best line: ${formatLineSan(f.bestLineSan, f.ply)}.`);
+  if (!r.isBest && r.attemptRefutationSan?.length) {
+    lines.push(`The opponent's strongest reply to ${tried}: ${formatLineSan(r.attemptRefutationSan, f.ply + 1)}.`);
+  }
+  if (r.isGameMove) {
+    lines.push(`${tried} is also the move played in the game.`);
+    if (!r.isBest && f.reason) lines.push(`Why: ${f.reason}`);
+  } else {
+    lines.push(
+      `In the game the player chose ${f.playedSan}: ${side}'s win chance went from ${Math.round(f.winBefore)}% to ` +
+        `${Math.round(f.winAfter)}%${f.bestUci === null ? ' (that was the best move)' : ''}.`,
+    );
+    if (f.bestUci !== null && f.refutationSan?.length) {
+      lines.push(`The opponent's strongest reply to ${f.playedSan} (the game move): ${formatLineSan(f.refutationSan, f.ply + 1)}.`);
+    }
+    if (f.bestUci !== null && f.reason) lines.push(`About the game move: ${f.reason}`);
+  }
+  if (tally) lines.push(tally);
+  lines.push(
+    'Checked with a deeper search just now; these are the only moves and numbers to quote for this position. ' +
+      "Next: name the thinking error behind the player's reason (save it with coach_note_thinking), then show the refutation.",
+  );
+  return lines.join('\n');
+}
+
+/**
+ * The coach's script for one session (spec §6b, steps 1–8), plus the rules. Only names tools
+ * that exist; drills and the re-check get their own tools later.
+ */
+export function coachMeText(username: string): string {
+  const u = username;
+  return [
+    `Coach me on my Chess.com games. My username is ${u}.`,
     '',
-    'How to run this session:',
-    `1. Call coach_diagnosis with usernames ["${username}"] (blitz, ${SOURCE_CFG.defaultMaxGames} games). If it says games are still being analysed, tell me how far it got and check again shortly.`,
-    '2. Show me the table in plain words, then the focus.',
-    '3. Show one example position for the focus with coach_explain_position, and explain it only from what that tool returns.',
+    'You are my chess coach for one session of about 15 minutes. The report only starts the lesson; ' +
+      'the teaching is what matters. Follow this script, one step at a time, and wait for me where it says so.',
+    '',
+    'Before you start:',
+    `- Ask me once whether to include other Chess.com accounts of mine, and how many recent games of each. ` +
+      `If I don't say, use just ${u} and the last ${SOURCE_CFG.defaultMaxGames} blitz games.`,
+    `- One account: pass usernames ["${u}"] to the tools. Several: pass accounts [{ username, maxGames }, ...] instead, ` +
+      `with ${u} first (the first account names my student file). Use the same accounts for every tool all session.`,
+    '- If I am playing a game right now, stop and offer to look at it after the game.',
+    '',
+    'The session:',
+    '1. Report card. Call coach_start_analysis, then coach_diagnosis until it is done (while games are still being ' +
+      'analysed, tell me how far it got and check again shortly). Then call coach_report; the board shows the report card. ' +
+      "Add a one- or two-sentence headline of your own, nothing more; give the table in text only if the board didn't show.",
+    '2. Warm-up. Call coach_student. If I had an earlier session, tell me its line ("Last time: …, 4 of 7 right") and ' +
+      'ask its warm-up position again with coach_ask_position (that gameId and ply), the same way as step 4. ' +
+      'If this is my first session, skip this step.',
+    "3. Today's theme: the one focus from the report, with my own numbers (my %, players at my rating %, and the number of games).",
+    '4. A guided position, where I try first:',
+    '   - Call coach_ask_position without a gameId. It picks a position from my games with the focus pattern, checks it ' +
+      'with a deeper search, and shows it as a question: no arrows, no hint.',
+    '   - Ask: "What would you play here, and what were you worried about?" Then wait. I either move on the board ' +
+      '(it puts "I played … here, because" in the chat for me to finish) or type my move and my reason.',
+    '   - Once you have my move and my reason, call coach_check_move with that gameId and ply and my move. ' +
+      'The board then shows my move against the best move.',
+    '   - Say in one line whether I was right, using the win chances the tool gives. Then name the thinking error behind ' +
+      'my reason, not just the move (for example "you didn\'t ask what their last move threatened"), and save it with ' +
+      "coach_note_thinking. Then show the refutation, from the tool's lines.",
+    '5. Practice: three to five more positions of the same pattern, each with coach_ask_position (no gameId) and the same ' +
+      'try-first loop. After a few, point out what the positions have in common.',
+    '6. One rule of thumb for my live games, in one sentence, drawn from the thinking errors you saw. Save it with ' +
+      'coach_note_thinking (rule).',
+    `7. Homework: about 30 more games in the same time class before the next session, and practice of this focus on my ` +
+      `phone in Postgame (${POSTGAME_URL}). If you have a tool that sends drills to Postgame, use it; otherwise don't promise drills.`,
+    '8. Close by saying what the next session does: it starts from my student file ("last time: …, 4 of 7 right"), ' +
+      'and once I have played about 30 new games, it re-checks this focus on them with a fresh coach_diagnosis.',
     '',
     'Rules:',
-    ...COACH_ME_RULES.map((r) => `- ${r}`),
+    '- Never reveal the answer before I try: no best move, no evaluation and no hint that points at a move until ' +
+      'coach_check_move has scored my try. If I ask for a hint, ask a thinking question instead ("what changed after their last move?").',
+    '- After the answer, name the thinking error first, then show the refutation.',
+    '- Three to five positions of the same pattern.',
+    '- One rule of thumb per session.',
+    '- Never state a move or evaluation that a tool did not return.',
+    '- Always say how many games a finding rests on.',
+    "- Say 'not enough data' plainly when a tool says so; never guess past it.",
+    '- One focus at a time.',
+    '- No help during a live game: if I am playing right now, stop and offer to look after the game.',
+    '- Plain English and short turns: one position at a time.',
   ].join('\n');
 }
 
@@ -437,12 +575,50 @@ function uniqueGames(lists: CachedGame[][]): CachedGame[] {
 
 // ---- registration ----
 
+/** What the server remembers about one player's lesson in this session. */
+interface Lesson {
+  /** Lowercased primary username: names the student file. */
+  player: string;
+  d: Diagnosis;
+  games: CachedGame[];
+  focus: string | null;
+  /** Positions already asked (or cleared by the deep check) this session, as refKeys. */
+  asked: Set<string>;
+}
+
+type DiagnosisOutcome =
+  | { ready: false; result: Result; waiting: boolean }
+  | { ready: true; d: Diagnosis; view: DiagnosisView; text: string; games: CachedGame[]; qs: Query[]; skipped: number };
+
+const optionalUsername = z
+  .string()
+  .trim()
+  .min(1)
+  .optional()
+  .describe("The player's primary Chess.com username (names the student file). Leave out to use this session's player.");
+
 export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
   const listWaitMs = deps.listWaitMs ?? 1500;
   const startWaitMs = deps.startWaitMs ?? 20_000;
   const searchTimeoutMs = deps.searchTimeoutMs ?? 30_000;
   const diagnoseFn = deps.diagnose ?? diagnose;
-  const memo = new Map<string, { view: DiagnosisView; text: string }>();
+  const memo = new Map<string, { d: Diagnosis; view: DiagnosisView; text: string }>();
+  /** Every deep search of this session, so a position always gets the same answer. */
+  const searches: SearchMemo = new Map();
+  const lessons = new Map<string, Lesson>();
+  /** The player of the last diagnosis or report: the default for the coaching tools. */
+  let currentPlayer: string | null = null;
+  /** The student-file session each player is writing to in this server session. */
+  const openSessions = new Map<string, { index: number; lastAt: number }>();
+
+  /** The display engine with a time limit per search and this session's search memo. */
+  function deepEngine(): DisplayEngine {
+    const engine = deps.display.get();
+    return memoDisplayEngine(
+      guardDisplayEngine(engine, searchTimeoutMs, () => deps.display.reset(engine)),
+      searches,
+    );
+  }
 
   /** Starts by query, from this server session: the diagnosis reuses them instead of re-walking the archives. */
   interface Tracked {
@@ -480,6 +656,128 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
     for (const t of ts) if (tracked.get(keyOf(t.q)) === t) tracked.delete(keyOf(t.q));
   }
 
+  /**
+   * The diagnosis for a set of queries, shared by coach_diagnosis and coach_report: progress
+   * while games are fetched or analysed, a plain failure, or the diagnosis (which also becomes
+   * the player's lesson for the coaching tools).
+   */
+  async function diagnosisFor(args: QueryArgs): Promise<DiagnosisOutcome> {
+    const qs = toQueries(args);
+    if (typeof qs === 'string') return { ready: false, result: failure(qs), waiting: false };
+    const ts = qs.map((q) => track(q, false));
+    const broken = ts.find((t) => t.error !== undefined);
+    if (broken) {
+      forget(ts);
+      return { ready: false, waiting: false, result: failure(`Could not get the game list from Chess.com: ${broken.error}. Call again to retry.`) };
+    }
+    let r: { value: Started[] } | null;
+    try {
+      r = await within(Promise.all(ts.map((t) => t.started)), listWaitMs);
+    } catch (e) {
+      forget(ts);
+      return { ready: false, waiting: false, result: failure(`Could not get the game list from Chess.com: ${msg(e)}. Call again to retry.`) };
+    }
+    if (!r) {
+      return { ready: false, waiting: true, result: reply('Getting the game lists from Chess.com. Ask again in a moment.', { state: 'fetching' }) };
+    }
+
+    const jobIds = r.value.map((st) => st.jobId);
+    const statuses: JobStatus[] = jobIds.map((id) => deps.runner.status(id));
+    const failed = statuses.find((st) => st.state === 'error');
+    if (failed) {
+      forget(ts);
+      return { ready: false, waiting: false, result: failure(`The analysis stopped: ${failed.error}. Call coach_start_analysis to try again.`) };
+    }
+    const sum = (f: (st: JobStatus) => number) => statuses.reduce((n, st) => n + f(st), 0);
+    const skipped = sum((st) => st.skipped ?? 0);
+    if (statuses.some((st) => st.state === 'running')) {
+      const done = sum((st) => st.done);
+      const total = sum((st) => st.total);
+      return { ready: false, waiting: true, result: reply(progressText(done, total, skipped), { state: 'running', jobIds, done, total, skipped }) };
+    }
+
+    // Reading the cache is fast; the diagnosis itself is not (about 1.7 s for 900 games), so the
+    // result is kept per query set and exact set of cached games, and recomputed when either changes.
+    const games = uniqueGames(await Promise.all(qs.map((q) => deps.runner.load(q))));
+    const memoKey = createHash('sha256')
+      .update(JSON.stringify([qs.map(keyOf), games.map((c) => c.game.id).sort()]))
+      .digest('hex');
+    let found = memo.get(memoKey);
+    if (!found) {
+      const usernames = qs.flatMap((q) => q.usernames);
+      const d = diagnoseFn(games, usernames);
+      const examples = examplePositions(d, games, EXAMPLES).map(toRef);
+      const byAccount =
+        qs.length > 1
+          ? qs.map((q) => {
+              const names = new Set(q.usernames.map((u) => u.toLowerCase()));
+              const n = games.filter((c) => names.has(c.game.username.toLowerCase()) && gamePlies(c) !== null).length;
+              return { username: q.usernames.join(', '), games: n };
+            })
+          : [];
+      const view = diagnosisView(d, examples, repeatedRefs(d, games), byAccount);
+      found = { d, view, text: diagnosisText(view) };
+      memo.set(memoKey, found);
+      if (memo.size > MEMO_SIZE) memo.delete(memo.keys().next().value as string);
+    }
+
+    const player = qs[0].usernames[0].toLowerCase();
+    lessons.set(player, { player, d: found.d, games, focus: focusLabel(found.d), asked: lessons.get(player)?.asked ?? new Set() });
+    currentPlayer = player;
+    return { ready: true, d: found.d, view: found.view, text: found.text, games, qs, skipped };
+  }
+
+  /**
+   * The player a coaching tool is about: the argument (which then becomes this session's
+   * player), else this session's player, else the game's account.
+   */
+  function playerFor(username: string | undefined, c?: CachedGame): string | null {
+    if (username) return (currentPlayer = username.toLowerCase());
+    return currentPlayer ?? c?.game.username.toLowerCase() ?? null;
+  }
+
+  /** Index of the student-file session open in this server session, if it is still the file's last one. */
+  function openIndex(player: string, s: StudentFile): number | null {
+    const open = openSessions.get(player);
+    if (!open || Date.now() - open.lastAt > SESSION_IDLE_MS || open.index !== s.sessions.length - 1) return null;
+    return open.index;
+  }
+
+  /**
+   * Loads, edits and saves the player's student file. The first write of this server session
+   * (or after SESSION_IDLE_MS) opens a new session, with the lesson's focus.
+   */
+  function editStudent(player: string, edit: (s: StudentFile) => StudentFile): StudentFile {
+    let s = loadStudent(player);
+    if (openIndex(player, s) === null) s = startSession(s, lessons.get(player)?.focus ?? null);
+    s = edit(s);
+    saveStudent(s);
+    openSessions.set(player, { index: s.sessions.length - 1, lastAt: Date.now() });
+    return s;
+  }
+
+  /** A cached game and one of the player's own plies in it, or the reason it can't be used. */
+  function ownPosition(gameId: string, ply: number): { c: CachedGame } | { error: Result } {
+    const c = readCached(gameId);
+    if (!c) {
+      return { error: failure(`Game ${gameId} is not analysed yet, so there is nothing to show. Run coach_diagnosis first and use one of its gameIds.`) };
+    }
+    const plies = c.analysis.plies;
+    const p = plies[ply];
+    if (!p) return { error: failure(`Game ${gameId} has plies 0 to ${plies.length - 1}; ply ${ply} is not one of them.`) };
+    if (p.color !== c.game.myColor) {
+      const own = [ply - 1, ply + 1].filter((x) => x >= 0 && x < plies.length);
+      return {
+        error: failure(
+          `Ply ${ply} (${moveLabel(Math.floor(ply / 2) + 1, p.color, p.moveSan)}) is your opponent's move, not yours. ` +
+            `The board shows your own moves only (you were ${capitalize(c.game.myColor)} in this game)` +
+            `${own.length ? `: try ply ${own.join(' or ')}` : ''}.`,
+        ),
+      };
+    }
+    return { c };
+  }
+
   registerAppTool(
     server,
     'coach_explain_position',
@@ -490,6 +788,7 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
         "Stockfish's best move (green arrow) and best line, the opponent's strongest reply, and the win chance before " +
         'and after. Stockfish first re-checks the position with a deeper search, so this takes a few seconds. ' +
         'Use a gameId and ply from coach_diagnosis. Call this before naming the best move in any position. ' +
+        'Not for a position the player is about to try (coach_ask_position): it shows the answer. ' +
         NO_INVENTED_FACTS,
       inputSchema: {
         gameId: z.string().min(1).describe('Game id from coach_diagnosis (the Chess.com game URL)'),
@@ -498,33 +797,15 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
       _meta: { ui: { resourceUri: BOARD_URI } },
     },
     async ({ gameId, ply }) => {
-      const c = readCached(gameId);
-      if (!c) {
-        return failure(`Game ${gameId} is not analysed yet, so there is nothing to show. Run coach_diagnosis first and use one of its gameIds.`);
-      }
-      const plies = c.analysis.plies;
-      const p = plies[ply];
-      if (!p) return failure(`Game ${gameId} has plies 0 to ${plies.length - 1}; ply ${ply} is not one of them.`);
-      if (p.color !== c.game.myColor) {
-        const own = [ply - 1, ply + 1].filter((x) => x >= 0 && x < plies.length);
-        return failure(
-          `Ply ${ply} (${moveLabel(Math.floor(ply / 2) + 1, p.color, p.moveSan)}) is your opponent's move, not yours. ` +
-            `The board shows your own moves only (you were ${capitalize(c.game.myColor)} in this game)` +
-            `${own.length ? `: try ply ${own.join(' or ')}` : ''}.`,
-        );
-      }
+      const own = ownPosition(gameId, ply);
+      if ('error' in own) return own.error;
       let facts: PositionFacts;
       try {
-        const engine = deps.display.get();
-        facts = await deepPositionFacts(
-          c,
-          ply,
-          guardDisplayEngine(engine, searchTimeoutMs, () => deps.display.reset(engine)),
-        );
+        facts = await deepPositionFacts(own.c, ply, deepEngine());
       } catch (e) {
         return failure(`Could not check this position: ${msg(e)}`);
       }
-      const disagrees = deepDisagrees(p.classification, facts.classification);
+      const disagrees = deepDisagrees(own.c.analysis.plies[ply].classification, facts.classification);
       return reply(explainText(facts, disagrees), { ...toAnswerView(facts), deepDisagrees: disagrees });
     },
   );
@@ -556,7 +837,7 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
           { state: 'fetching' },
         );
       }
-      const accounts = r.value.map((s, i) => ({ usernames: qs[i].usernames, jobId: s.jobId, total: s.total, cached: s.cached }));
+      const accounts = r.value.map((st, i) => ({ usernames: qs[i].usernames, jobId: st.jobId, total: st.total, cached: st.cached }));
       const statuses = accounts.map((a) => deps.runner.status(a.jobId));
       const total = accounts.reduce((n, a) => n + a.total, 0);
       const cached = accounts.reduce((n, a) => n + a.cached, 0);
@@ -603,65 +884,304 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
       },
     },
     async (args) => {
-      const qs = toQueries(args);
-      if (typeof qs === 'string') return failure(qs);
-      const ts = qs.map((q) => track(q, false));
-      const broken = ts.find((t) => t.error !== undefined);
-      if (broken) {
-        forget(ts);
-        return failure(`Could not get the game list from Chess.com: ${broken.error}. Call again to retry.`);
+      const o = await diagnosisFor(args);
+      if (!o.ready) return o.result;
+      let text = o.text;
+      if (o.skipped) text += `\n\n${plural(o.skipped, 'game')} could not be read and ${o.skipped === 1 ? 'was' : 'were'} left out.`;
+      return reply(text, { ...o.view });
+    },
+  );
+
+  registerAppTool(
+    server,
+    'coach_report',
+    {
+      title: 'Show the report card',
+      description:
+        "Shows the player's report card on the board: up to six areas in plain words, their serious-mistake rate against " +
+        'players at their rating, the game count and the focus. Call it once coach_diagnosis is done, with the same ' +
+        'arguments; while games are still being analysed it says so and shows nothing. Also returns the table as text ' +
+        '(show that only if the board did not appear). Afterwards, practice positions come from coach_ask_position. ' +
+        NO_INVENTED_FACTS,
+      inputSchema: {
+        usernames: usernamesSchema,
+        accounts: accountsSchema,
+        timeClass: timeClassSchema,
+        maxGames: maxGamesSchema,
+        asOf: asOfSchema,
+        headline: z
+          .string()
+          .trim()
+          .min(1)
+          .max(300)
+          .optional()
+          .describe('One or two sentences for the top of the card, from the diagnosis only. Leave out for a plain one.'),
+      },
+      _meta: { ui: { resourceUri: BOARD_URI } },
+    },
+    async ({ headline, ...args }) => {
+      const o = await diagnosisFor(args);
+      if (!o.ready) {
+        if (!o.waiting) return o.result;
+        return failure(
+          `The report card isn't ready yet. ${o.result.content[0].text} ` +
+            'Call coach_diagnosis until it is done, then coach_report again.',
+        );
       }
-      let r: { value: Started[] } | null;
+      const head = headline ?? defaultHeadline(o.d);
+      const next =
+        o.d.focus === null
+          ? 'No focus yet, so there is nothing to practise: say so plainly.'
+          : `Practice positions for the focus (${focusLabel(o.d)}): call coach_ask_position without a gameId; ` +
+            'each is checked with a deeper search before it is asked.';
+      const lines = [`Report card headline: ${head}`, '', diagnosisText({ ...o.view, examples: [] }), '', next];
+      if (o.skipped) lines.push(`${plural(o.skipped, 'game')} could not be read and ${o.skipped === 1 ? 'was' : 'were'} left out.`);
+      return reply(lines.join('\n'), { ...toReportView(o.d, head) });
+    },
+  );
+
+  registerAppTool(
+    server,
+    'coach_ask_position',
+    {
+      title: 'Ask the player a position',
+      description:
+        'Shows a position from the player\'s games as a question: the board before their move, with no arrows, no ' +
+        'evaluation and no hint (try first). Without gameId and ply it picks the next practice position for the focus of ' +
+        'the last coach_report or coach_diagnosis, skipping ones already asked; with them it asks that position (for ' +
+        'the warm-up from coach_student). Each position is checked with a deeper search first and only asked if the ' +
+        'game move really was a mistake there, so this takes a few seconds. Never name or hint at a move or evaluation ' +
+        'until coach_check_move has scored the player\'s try.',
+      inputSchema: {
+        gameId: z.string().min(1).optional().describe('Game id of a position to ask (with ply); leave out for the next practice position'),
+        ply: z.number().int().min(0).optional().describe("0-based ply of the player's own move (with gameId)"),
+        prompt: z.string().trim().min(1).max(200).optional().describe(`The question above the board. Default: "${DEFAULT_QUESTION}"`),
+        username: optionalUsername,
+      },
+      _meta: { ui: { resourceUri: BOARD_URI } },
+    },
+    async ({ gameId, ply, prompt, username }) => {
+      const question = prompt ?? DEFAULT_QUESTION;
+      if ((gameId === undefined) !== (ply === undefined)) {
+        return failure('Give both gameId and ply, or neither (for the next practice position).');
+      }
+      const player = playerFor(username);
+      const lesson = player ? lessons.get(player) : undefined;
+      let engine: DisplayEngine;
       try {
-        r = await within(Promise.all(ts.map((t) => t.started)), listWaitMs);
+        engine = deepEngine();
       } catch (e) {
-        forget(ts);
-        return failure(`Could not get the game list from Chess.com: ${msg(e)}. Call again to retry.`);
-      }
-      if (!r) return reply('Getting the game lists from Chess.com. Ask again in a moment.', { state: 'fetching' });
-
-      const jobIds = r.value.map((s) => s.jobId);
-      const statuses: JobStatus[] = jobIds.map((id) => deps.runner.status(id));
-      const failed = statuses.find((st) => st.state === 'error');
-      if (failed) {
-        forget(ts);
-        return failure(`The analysis stopped: ${failed.error}. Call coach_start_analysis to try again.`);
-      }
-      const sum = (f: (st: JobStatus) => number) => statuses.reduce((n, st) => n + f(st), 0);
-      const skipped = sum((st) => st.skipped ?? 0);
-      if (statuses.some((st) => st.state === 'running')) {
-        const done = sum((st) => st.done);
-        const total = sum((st) => st.total);
-        return reply(progressText(done, total, skipped), { state: 'running', jobIds, done, total, skipped });
+        return failure(`Could not check the position: ${msg(e)}`);
       }
 
-      // Reading the cache is fast; the diagnosis itself is not (about 1.7 s for 900 games), so the
-      // result is kept per query set and exact set of cached games, and recomputed when either changes.
-      const games = uniqueGames(await Promise.all(qs.map((q) => deps.runner.load(q))));
-      const memoKey = createHash('sha256')
-        .update(JSON.stringify([qs.map(keyOf), games.map((c) => c.game.id).sort()]))
-        .digest('hex');
-      let found = memo.get(memoKey);
-      if (!found) {
-        const usernames = qs.flatMap((q) => q.usernames);
-        const d = diagnoseFn(games, usernames);
-        const examples = examplePositions(d, games, EXAMPLES).map(toRef);
-        const byAccount =
-          qs.length > 1
-            ? qs.map((q) => {
-                const names = new Set(q.usernames.map((u) => u.toLowerCase()));
-                const n = games.filter((c) => names.has(c.game.username.toLowerCase()) && gamePlies(c) !== null).length;
-                return { username: q.usernames.join(', '), games: n };
-              })
-            : [];
-        const view = diagnosisView(d, examples, repeatedRefs(d, games), byAccount);
-        found = { view, text: diagnosisText(view) };
-        memo.set(memoKey, found);
-        if (memo.size > MEMO_SIZE) memo.delete(memo.keys().next().value as string);
+      let picked: { c: CachedGame; ply: number; facts: PositionFacts };
+      if (gameId !== undefined && ply !== undefined) {
+        const own = ownPosition(gameId, ply);
+        if ('error' in own) return own.error;
+        let facts: PositionFacts;
+        try {
+          facts = await deepPositionFacts(own.c, ply, engine);
+        } catch (e) {
+          return failure(`Could not check this position: ${msg(e)}`);
+        }
+        if (!isTeachable(own.c.analysis.plies[ply].classification, facts)) {
+          lesson?.asked.add(refKey(gameId, ply));
+          return failure(
+            "On a deeper check, the move played in the game here wasn't a real mistake, so this position isn't worth " +
+              'practising. Call coach_ask_position without gameId and ply for the next practice position.',
+          );
+        }
+        picked = { c: own.c, ply, facts };
+      } else {
+        if (!lesson) {
+          return failure('No lesson yet: call coach_report (or coach_diagnosis) for this player first, then ask again.');
+        }
+        const exclude = new Set(lesson.asked);
+        try {
+          const s = loadStudent(lesson.player);
+          const cur = openIndex(lesson.player, s);
+          s.sessions.forEach((sess, i) => {
+            for (const t of sess.tried) if (t.correct || i === cur) exclude.add(refKey(t.gameId, t.ply));
+          });
+        } catch {
+          // No readable student file: only this session's positions are left out.
+        }
+        const cands = samePatternPositions(lesson.d, lesson.games, [...exclude], ASK_CANDIDATES);
+        if (cands.length === 0) {
+          return failure(
+            lesson.d.focus === null
+              ? 'There is no focus yet, so there is nothing to practise.'
+              : 'No more practice positions for this focus in these games. Move on to the rule of thumb.',
+          );
+        }
+        const byId = new Map(lesson.games.map((c) => [c.game.id, c]));
+        let r: Awaited<ReturnType<typeof firstTeachable>>;
+        try {
+          r = await firstTeachable(cands, (id) => byId.get(id) ?? readCached(id), (c, p) => deepPositionFacts(c, p, engine), ASK_MAX_CHECKS);
+        } catch (e) {
+          return failure(`Could not check the next position: ${msg(e)}`);
+        }
+        for (const x of r.skipped) lesson.asked.add(refKey(x.gameId, x.ply));
+        if (!r.found) {
+          return failure(
+            `The deeper check cleared the ${plural(r.skipped.length, 'position')} it looked at (the game move held up). ` +
+              (cands.length > r.skipped.length
+                ? 'Call coach_ask_position again to check the next ones.'
+                : 'No more practice positions for this focus in these games.'),
+          );
+        }
+        picked = r.found;
       }
-      let text = found.text;
-      if (skipped) text += `\n\n${plural(skipped, 'game')} could not be read and ${skipped === 1 ? 'was' : 'were'} left out.`;
-      return reply(text, { ...found.view });
+      lesson?.asked.add(refKey(picked.c.game.id, picked.ply));
+      return reply(questionText(picked.facts, question), { ...toQuestionView(picked.facts, question) });
+    },
+  );
+
+  registerAppTool(
+    server,
+    'coach_check_move',
+    {
+      title: "Score the player's try",
+      description:
+        'Scores the move the player tried in a position from coach_ask_position, with a deeper search, records it in ' +
+        "their student file, and shows it on the board against Stockfish's best move. Call it once the player has given " +
+        "their move and their reason. Returns the verdict (right means losing at most " +
+        `${REPEAT_CFG.wrongLossPts}% win chance against the best move), both win chances, the best line, the opponent's ` +
+        'reply to their move, and the game move\'s numbers. ' +
+        NO_INVENTED_FACTS,
+      inputSchema: {
+        gameId: z.string().min(1).describe('The gameId from coach_ask_position'),
+        ply: z.number().int().min(0).describe('The ply from coach_ask_position'),
+        moveSan: z.string().trim().min(1).describe('The move the player tried, in SAN as they gave it (e.g. "Nf6", "O-O", "exd5")'),
+        username: optionalUsername,
+      },
+      _meta: { ui: { resourceUri: BOARD_URI } },
+    },
+    async ({ gameId, ply, moveSan, username }) => {
+      const own = ownPosition(gameId, ply);
+      if ('error' in own) return own.error;
+      let r: CheckResult;
+      try {
+        r = await checkMove(own.c, ply, moveSan, deepEngine());
+      } catch (e) {
+        return failure(`Could not check this move: ${msg(e)}`);
+      }
+      if (!r.legal) {
+        return failure(
+          `"${moveSan}" is not a legal move in this position (${capitalize(own.c.game.myColor)} to move). ` +
+            'Ask the player for their move again; nothing was recorded.',
+        );
+      }
+      const player = playerFor(username, own.c);
+      lessons.get(player ?? '')?.asked.add(refKey(gameId, ply));
+      let tally: string;
+      try {
+        if (!player) throw new Error('no username');
+        const s = editStudent(player, (st) =>
+          recordAttempt(st, {
+            gameId,
+            ply,
+            moveSan: r.attempt.moveSan,
+            correct: r.correct,
+            lossPts: Math.round(r.lossPts * 10) / 10,
+          }),
+        );
+        const tried = s.sessions[s.sessions.length - 1].tried;
+        tally = `Recorded in ${player}'s student file: ${tried.filter((t) => t.correct).length} of ${tried.length} right this session.`;
+      } catch (e) {
+        tally = `Not recorded in the student file: ${msg(e)}.`;
+      }
+      return reply(checkText(r, tally), {
+        ...toAnswerView(r.facts, r.attempt),
+        correct: r.correct,
+        lossPts: Math.round(r.lossPts * 10) / 10,
+        attemptWin: Math.round(r.attemptWin * 10) / 10,
+        bestWin: Math.round(r.bestWin * 10) / 10,
+      });
+    },
+  );
+
+  server.registerTool(
+    'coach_note_thinking',
+    {
+      title: 'Note a thinking error',
+      description:
+        "Saves, in the player's student file, a thinking error you noticed behind their reason (one short plain sentence, " +
+        'e.g. "didn\'t ask what the last move threatened"), and/or the session\'s one rule of thumb for live games.',
+      inputSchema: {
+        note: z.string().trim().min(1).max(300).optional().describe('The thinking error, in one short sentence'),
+        rule: z.string().trim().min(1).max(300).optional().describe("This session's rule of thumb for live games"),
+        username: optionalUsername,
+      },
+    },
+    async ({ note, rule, username }) => {
+      if (!note && !rule) return failure('Give a note (a thinking error), a rule (the rule of thumb), or both.');
+      const player = playerFor(username);
+      if (!player) return failure("Give the player's username (no player in this session yet).");
+      let s: StudentFile;
+      try {
+        s = editStudent(player, (st) => {
+          let out = note ? addThinkingNote(st, note) : st;
+          if (rule) out = setRule(out, rule);
+          return out;
+        });
+      } catch (e) {
+        return failure(`Could not save to the student file: ${msg(e)}`);
+      }
+      const cur = s.sessions[s.sessions.length - 1];
+      return reply(
+        `Saved in ${player}'s student file: ${plural(cur.thinkingNotes.length, 'thinking note')} this session` +
+          `${cur.rule ? '; rule of thumb set' : ''}.`,
+        { username: player, thinkingNotes: cur.thinkingNotes, rule: cur.rule },
+      );
+    },
+  );
+
+  server.registerTool(
+    'coach_student',
+    {
+      title: 'What the coach remembers',
+      description:
+        "Reads the player's student file for the warm-up: the last session's focus, how many positions they got right, " +
+        'the thinking errors noted and the rule of thumb, plus one position from it to ask again with coach_ask_position.',
+      inputSchema: { username: optionalUsername },
+    },
+    async ({ username }) => {
+      const player = playerFor(username);
+      if (!player) return failure("Give the player's username (no player in this session yet).");
+      let s: StudentFile;
+      try {
+        s = loadStudent(player);
+      } catch (e) {
+        return failure(`Could not read the student file: ${msg(e)}`);
+      }
+      const cur = openIndex(player, s);
+      const last = lastSessionSummary(s, cur ?? s.sessions.length);
+      const lines: string[] = [];
+      if (!last) {
+        lines.push(`No earlier sessions for ${player}: this is the first one, so skip the warm-up.`);
+      } else {
+        lines.push(last.text);
+        if (last.warmUp) {
+          lines.push(
+            `Warm-up from last time: gameId ${last.warmUp.gameId}, ply ${last.warmUp.ply}. Ask it again with coach_ask_position (try first).`,
+          );
+        }
+      }
+      const earlier = s.sessions.filter((x, i) => i !== cur && (x.tried.length > 0 || x.thinkingNotes.length > 0)).length;
+      if (earlier > 1) lines.push(`Sessions so far: ${earlier}.`);
+      const now = cur === null ? null : s.sessions[cur];
+      if (now && now.tried.length > 0) {
+        lines.push(`This session so far: ${now.tried.filter((t) => t.correct).length} of ${now.tried.length} right.`);
+      }
+      return reply(lines.join('\n'), {
+        username: player,
+        earlierSessions: earlier,
+        last: last
+          ? { at: last.at, focus: last.focus, right: last.right, tried: last.tried, thinkingNotes: last.thinkingNotes, rule: last.rule }
+          : null,
+        warmUp: last?.warmUp ?? null,
+      });
     },
   );
 
@@ -719,7 +1239,7 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
     'coach_me',
     {
       title: 'Coach me',
-      description: "Start a coaching session on a Chess.com player's recent games",
+      description: 'A coaching session on your recent Chess.com games: report card, then positions you try first',
       argsSchema: { username: z.string().min(1).describe('Chess.com username') },
     },
     ({ username }) => ({
