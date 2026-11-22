@@ -74,7 +74,8 @@ function withoutMoves(s: string, moveStart: RegExp): string {
 
 /** "Caro-Kann-Defense-Exchange-Variation" → "Caro-Kann Defense: Exchange Variation". */
 function fromSlug(slug: string): string | null {
-  const raw = withoutMoves(slug, /-?\d+\.|\.\.\./).split('-').filter(Boolean);
+  // Moves start at "-3.", "...", or "-with-1-d4" (a move written without its dot).
+  const raw = withoutMoves(slug, /-?\d+\.|\.\.\.|-with-\d/).split('-').filter(Boolean);
   const words: string[] = [];
   for (let i = 0; i < raw.length; i++) {
     const pair = `${raw[i]}-${raw[i + 1]}`;
