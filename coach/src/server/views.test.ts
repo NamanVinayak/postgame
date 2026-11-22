@@ -7,6 +7,7 @@ import {
   toReportView,
   type DiagnosisLike,
   type ReportLabel,
+  type ReportPosition,
 } from './views';
 
 // Made-up position after 1.e4 e5 2.Nf3 Nc6 3.Bc4, Black to move. Moves and numbers are fixture
@@ -215,6 +216,127 @@ describe('toReportView', () => {
     expect(byRepeated.kind === 'report' && byRepeated.focus).toBe('the 3 positions you keep getting wrong');
     expect(single.kind === 'report' && single.focus).toBe('the position you keep getting wrong');
     expect(none.kind === 'report' && none.focus).toBeNull();
+  });
+});
+
+// A real repeated position from a 900-game diagnosis: 1.e4 c5 2.Nf3 Nc6 3.Nc3 e6 4.d4 cxd4 5.Nxd4,
+// Black to move; usually g6 or d5, best Nf6.
+function position(over: Partial<ReportPosition> = {}): ReportPosition {
+  return {
+    fen: 'r1bqkbnr/pp1p1ppp/2n1p3/8/3NP3/2N5/PPP2PPP/R1BQKB1R b KQkq - 0 5',
+    orientation: 'black',
+    wrongSan: ['g6', 'd5'],
+    wrongUci: 'g7g6',
+    bestSan: 'Nf6',
+    bestUci: 'g8f6',
+    lossPts: 13.629230423597654,
+    wrongTimes: 8,
+    seenTimes: 9,
+    opening: 'Sicilian Defense: Taimanov Variation',
+    drillsDone: 0,
+    drillsTotal: 3,
+    ...over,
+  };
+}
+
+describe('toReportView with focus positions', () => {
+  const d = diagnosis([area({ area: 'endgame', label: 'notYourProblem', ci95: [-1, 0.5] })], {
+    kind: 'repeated',
+    keys: ['a', 'b', 'c'],
+  });
+
+  it('reportViewStillWorksWithoutPositions', () => {
+    for (const view of [toReportView(d, 'h'), toReportView(d, 'h', {})]) {
+      if (view.kind !== 'report') throw new Error('not a report');
+      // No new keys appear when the caller passes none, so old callers see the old shape.
+      expect(Object.keys(view).sort()).toEqual(['focus', 'games', 'headline', 'kind', 'rows', 'timeClass']);
+      expect(parseCoachView(JSON.parse(JSON.stringify(view)))).toEqual(view);
+    }
+  });
+
+  it('reportViewAcceptsPositionsUpToThree', () => {
+    const four = [
+      position(),
+      position({ wrongUci: null, opening: null }),
+      position({ fen: 'r1bqkbnr/pp3ppp/2n5/3pp3/3P4/2PB4/PP3PPP/RNBQK1NR w KQkq - 0 6', orientation: 'white', wrongSan: ['h3'], wrongUci: 'h2h3', bestSan: 'dxe5', bestUci: 'd4e5', lossPts: 21.386, wrongTimes: 3, seenTimes: 3, drillsDone: 3 }),
+      position({ bestSan: 'Be7' }), // the fourth is dropped
+    ];
+    const view = toReportView(d, 'Your rating is honest.', {
+      subhead: 'Against players at your rating, no part of your game stands out.',
+      positions: four,
+      cta: "Start this week's training",
+    });
+    if (view.kind !== 'report') throw new Error('not a report');
+    expect(view.subhead).toBe('Against players at your rating, no part of your game stands out.');
+    expect(view.cta).toBe("Start this week's training");
+    expect(view.positions).toHaveLength(3);
+    expect(view.positions?.map((p) => p.bestSan)).toEqual(['Nf6', 'Nf6', 'dxe5']);
+    // Win-chance loss rounded to one decimal, like the rows; everything else as given.
+    expect(view.positions?.[0]).toEqual({ ...position(), lossPts: 13.6 });
+    expect(view.positions?.[1].wrongUci).toBeNull();
+    expect(view.positions?.[1].opening).toBeNull();
+    expect(view.positions?.[2].lossPts).toBe(21.4);
+    expect(parseCoachView(JSON.parse(JSON.stringify(view)))).toEqual(view);
+  });
+
+  it('reportViewRejectsBadPosition', () => {
+    const good = toReportView(d, 'h', { positions: [position()], subhead: 's', cta: 'Go' });
+    if (good.kind !== 'report') throw new Error('not a report');
+    expect(parseCoachView(good)).toEqual(good);
+
+    const bad: Record<string, unknown>[] = [
+      { fen: 'r1bqkbnr/pp1p1ppp/2n1p3/8/3NP3/2N5/PPP2PPP b KQkq - 0 5' }, // 7 ranks
+      { fen: 'r1bqkbnr/pp1p1ppp/2n1p3/9/3NP3/2N5/PPP2PPP/R1BQKB1R b KQkq - 0 5' }, // a rank of 9 squares
+      { fen: 'r1bqkbnr/pp1p1ppp/2n1p3/8/3NP3/2N5/PPP2PPP/R1BQKB1R x KQkq - 0 5' }, // no side to move
+      { fen: 'r1bqkbnr/pp1p1ppp/2n1p3/8/3NP3/2N5/PPP2PPP/R1BQKB1R b KQkq - 0 5 <script>' },
+      { orientation: 'b' },
+      { wrongSan: [] },
+      { wrongSan: ['g6', 'd5', 'e5', 'a6', 'h6'] }, // more than four
+      { wrongSan: ['g6', 7] },
+      { wrongSan: ['<b>g6</b>'] },
+      { wrongUci: 'g7g9' },
+      { wrongUci: 'g6' },
+      { bestUci: 'Nf6' },
+      { bestUci: null },
+      { bestSan: '' },
+      { lossPts: Number.NaN },
+      { lossPts: Number.POSITIVE_INFINITY },
+      { lossPts: -2 },
+      { lossPts: '14' },
+      { wrongTimes: 10, seenTimes: 9 }, // wrong more often than seen
+      { wrongTimes: 1.5 },
+      { seenTimes: 0, wrongTimes: 0 },
+      { drillsDone: 4, drillsTotal: 3 },
+      { drillsDone: -1 },
+      { drillsTotal: 2.5 },
+      { opening: 5 },
+    ];
+    for (const over of bad) {
+      const view = { ...good, positions: [{ ...position(), ...over }] };
+      expect(parseCoachView(view), JSON.stringify(over)).toBeNull();
+      // The mapper never emits what the widget would refuse: a bad position is dropped, the rest stay.
+      const mapped = toReportView(d, 'h', { positions: [{ ...position(), ...over } as ReportPosition, position()] });
+      if (mapped.kind !== 'report') throw new Error('not a report');
+      expect(mapped.positions, JSON.stringify(over)).toEqual([{ ...position(), lossPts: 13.6 }]);
+      expect(parseCoachView(JSON.parse(JSON.stringify(mapped)))).toEqual(mapped);
+    }
+    // Report-level fields.
+    for (const over of [
+      { positions: [position(), position(), position(), position()] }, // more than three
+      { positions: 'none' },
+      { subhead: 3 },
+      { cta: '' },
+      { cta: 'x'.repeat(61) },
+    ]) {
+      expect(parseCoachView({ ...good, ...over }), JSON.stringify(over).slice(0, 80)).toBeNull();
+    }
+    // A button label the widget would refuse is left out (the widget's default applies), so the card still shows.
+    for (const cta of ['', '   ', 'x'.repeat(61)]) {
+      const mapped = toReportView(d, 'h', { positions: [position()], cta });
+      if (mapped.kind !== 'report') throw new Error('not a report');
+      expect(mapped.cta, JSON.stringify(cta)).toBeUndefined();
+      expect(parseCoachView(JSON.parse(JSON.stringify(mapped)))).toEqual(mapped);
+    }
   });
 });
 
