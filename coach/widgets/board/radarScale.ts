@@ -32,32 +32,59 @@ export const SPAN_DOUBLINGS = 1;
 /** The innermost a point can be drawn: double their rate or worse. */
 export const MIN_RADIUS = PEER_RADIUS - (1 - PEER_RADIUS);
 
-/** Where your point sits on a spoke, as a fraction of the chart's radius (MIN_RADIUS … 1). */
-export function relativeRadius(you: number, them: number): number {
+/**
+ * log2(their rate ÷ your rate), not clamped: + = fewer serious mistakes than them. No mistakes
+ * at all against some of theirs is +Infinity; the reverse is −Infinity; equal rates are 0.
+ */
+export function doublings(you: number, them: number): number {
   const y = Math.max(0, you);
   const t = Math.max(0, them);
-  let doublings: number; // + = fewer serious mistakes than them
-  if (y === t) doublings = 0;
-  else if (y === 0) doublings = SPAN_DOUBLINGS;
-  else if (t === 0) doublings = -SPAN_DOUBLINGS;
-  else doublings = Math.max(-SPAN_DOUBLINGS, Math.min(SPAN_DOUBLINGS, Math.log2(t / y)));
-  return PEER_RADIUS + (1 - PEER_RADIUS) * (doublings / SPAN_DOUBLINGS);
+  if (y === t) return 0;
+  if (y === 0) return Number.POSITIVE_INFINITY;
+  if (t === 0) return Number.NEGATIVE_INFINITY;
+  return Math.log2(t / y);
 }
 
-/** The quietest a likely-range band is drawn. */
-export const MIN_BAND_OPACITY = 0.35;
+/** Where your point sits on a spoke, as a fraction of the chart's radius (MIN_RADIUS … 1). */
+export function relativeRadius(you: number, them: number): number {
+  const d = Math.max(-SPAN_DOUBLINGS, Math.min(SPAN_DOUBLINGS, doublings(you, them)));
+  return PEER_RADIUS + (1 - PEER_RADIUS) * (d / SPAN_DOUBLINGS);
+}
+
+/** A likely-range band's two ends on a spoke, and whether the chart's edge cuts either one. */
+export interface BandEnds {
+  /** From your highest likely rate (fractions of the chart's radius). */
+  inner: number;
+  /** From your lowest likely rate. */
+  outer: number;
+  /** The band would run below the inner limit (more than double their rate). */
+  cutInner: boolean;
+  /** The band would run past the rim (under half their rate). */
+  cutOuter: boolean;
+}
 
 /**
- * How strongly to draw a spoke's likely-range band, from where its outer end sits (a fraction
- * of the chart's radius). Up to the hexagon it is drawn at full strength. Beyond it, it fades
- * the further it pokes out, reaching MIN_BAND_OPACITY halfway to the rim. A wide band then
- * never reads louder than your point.
+ * Where "where you likely are" runs on a spoke: your likely range of mistake rates on the same
+ * scale as your point. Every band is drawn the same way. Where the chart's edge cuts one, the
+ * widget marks the cut with a small end tick rather than hiding it.
  */
-export function bandOpacity(outer: number): number {
-  const beyond = Math.max(0, outer - PEER_RADIUS) / (1 - PEER_RADIUS); // 0 at the hexagon, 1 at the rim
-  const k = beyond / 0.5;
-  if (k >= 1) return MIN_BAND_OPACITY;
-  return 1 - (1 - MIN_BAND_OPACITY) * k;
+export function bandEnds(range: [number, number], them: number): BandEnds {
+  const [lo, hi] = range;
+  return {
+    inner: relativeRadius(hi, them),
+    outer: relativeRadius(lo, them),
+    cutInner: doublings(hi, them) < -SPAN_DOUBLINGS,
+    cutOuter: doublings(lo, them) > SPAN_DOUBLINGS,
+  };
+}
+
+/** With more areas than this short of games, no shape is drawn at all: only the points we have. */
+export const MAX_UNKNOWN_FOR_SHAPE = 2;
+
+/** Whether the chart draws your filled shape: at least three areas with numbers, at most two without. */
+export function shapeDrawn(rows: Pick<ReportRow, 'you' | 'them'>[]): boolean {
+  const known = rows.filter((r) => r.you !== null && r.them !== null).length;
+  return known >= 3 && rows.length - known <= MAX_UNKNOWN_FOR_SHAPE;
 }
 
 /** How each verdict reads on a chip. "Too close to call" and "Not enough games" stay neutral. */
@@ -73,7 +100,8 @@ export const pct = (x: number) => `${x.toFixed(1)}%`;
 /**
  * The chart in plain words, for screen readers: which areas sit outside the hexagon (fewer
  * serious mistakes than players at your rating), which inside (more), which level, which have
- * too few games, then each area's numbers and verdict. Empty groups are left out.
+ * too few games, then each area's numbers and verdict. Empty groups are left out. It speaks of
+ * "your shape" only when the chart draws one (see shapeDrawn), otherwise of "your points".
  */
 export function radarSummary(rows: Pick<ReportRow, 'area' | 'label' | 'you' | 'them'>[]): string {
   const outside: string[] = [];
@@ -86,7 +114,7 @@ export function radarSummary(rows: Pick<ReportRow, 'area' | 'label' | 'you' | 't
     else if (r.you > r.them) inside.push(r.area);
     else level.push(r.area);
   }
-  const parts = ['Your shape against players at your rating, the dashed hexagon.'];
+  const parts = [`Your ${shapeDrawn(rows) ? 'shape' : 'points'} against players at your rating, the dashed hexagon.`];
   if (outside.length) parts.push(`Outside it, fewer serious mistakes than them: ${outside.join(', ')}.`);
   if (inside.length) parts.push(`Inside it, more: ${inside.join(', ')}.`);
   if (level.length) parts.push(`Level with them: ${level.join(', ')}.`);

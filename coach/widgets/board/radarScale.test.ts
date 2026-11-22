@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MIN_RADIUS, PEER_RADIUS, bandOpacity, radarSummary, relativeRadius } from './radarScale';
+import { MIN_RADIUS, PEER_RADIUS, bandEnds, radarSummary, relativeRadius, shapeDrawn } from './radarScale';
 
 describe('relativeRadius (the report radar, relative to players at your rating)', () => {
   it('radarEqualRatesSitExactlyOnTheHexagon', () => {
@@ -68,24 +68,33 @@ describe('relativeRadius (the report radar, relative to players at your rating)'
   });
 });
 
-describe('bandOpacity (where you likely are, quieter when it pokes far outside the hexagon)', () => {
-  it('radarBandFullStrengthInsideTheHexagon', () => {
-    for (const outer of [MIN_RADIUS, 0.4, PEER_RADIUS]) expect(bandOpacity(outer)).toBe(1);
+describe('bandEnds (where you likely are, on the same scale as your point)', () => {
+  it('bandsAreCutAtTheChartEdgeWithAFlag', () => {
+    // A band well inside the chart: both ends mapped, nothing cut.
+    expect(bandEnds([2.9, 5.3], 4.2)).toEqual({
+      inner: relativeRadius(5.3, 4.2),
+      outer: relativeRadius(2.9, 4.2),
+      cutInner: false,
+      cutOuter: false,
+    });
+    // Your lowest likely rate under half theirs: the band would run past the rim, so it is cut there.
+    expect(bandEnds([1, 6], 5)).toMatchObject({ outer: 1, cutOuter: true, cutInner: false });
+    // Exactly half lands on the rim without being cut.
+    expect(bandEnds([2.5, 6], 5)).toMatchObject({ outer: 1, cutOuter: false });
+    // Your highest likely rate over double theirs: cut at the inner limit.
+    expect(bandEnds([4, 12], 5)).toMatchObject({ inner: MIN_RADIUS, cutInner: true, cutOuter: false });
+    // A band starting at 0% runs past the rim (no mistakes at all is infinitely better).
+    expect(bandEnds([0, 6], 5)).toMatchObject({ outer: 1, cutOuter: true });
   });
+});
 
-  it('radarBandFadesTheFurtherItPokesOut', () => {
-    let last = 1;
-    for (let outer = PEER_RADIUS; outer <= 1; outer += 0.01) {
-      const o = bandOpacity(outer);
-      expect(o).toBeLessThanOrEqual(last);
-      expect(o).toBeGreaterThanOrEqual(0.35);
-      last = o;
-    }
-    expect(bandOpacity(1)).toBe(0.35);
-    // Real data: "When you're behind" (you likely 2.9% to 5.3%, them 4.2%) reaches over halfway to
-    // the rim, so its band is drawn quieter than the point; "Middlegames" barely leaves the hexagon.
-    expect(bandOpacity(relativeRadius(2.9, 4.2))).toBeLessThan(0.5);
-    expect(bandOpacity(relativeRadius(19.0, 19.7))).toBeGreaterThan(0.9);
+describe('shapeDrawn', () => {
+  const row = (you: number | null) => ({ area: 'A', label: 'notYourProblem' as const, you, them: you === null ? null : 5 });
+  it('shapeOnlyWithThreeKnownAndAtMostTwoUnknown', () => {
+    expect(shapeDrawn([row(4), row(5), row(6)])).toBe(true);
+    expect(shapeDrawn([row(4), row(5), row(6), row(null), row(null)])).toBe(true);
+    expect(shapeDrawn([row(4), row(5), row(6), row(null), row(null), row(null)])).toBe(false); // 3 unknown
+    expect(shapeDrawn([row(4), row(5), row(null)])).toBe(false); // only 2 known
   });
 });
 
@@ -105,9 +114,24 @@ describe('radarSummary (the chart in words, for screen readers)', () => {
     expect(text).toContain('Endgames: you 10.9%, them 7.9%, weak spot');
     expect(text).toContain('Middlegames: you 19.7%, them 19.7%, too close to call');
     expect(text).not.toMatch(/\bCI\b|bootstrap|p-value|confidence/i);
+    expect(text.startsWith('Your shape against players at your rating')).toBe(true); // 4 known, 1 unknown: a shape is drawn
     // Empty groups are not mentioned.
     const allOut = radarSummary([{ area: 'Openings', label: 'notYourProblem', you: 5, them: 9 }]);
     expect(allOut).not.toContain('Inside');
     expect(allOut).not.toContain('Not enough games');
+  });
+
+  it('radarSummaryNeverMentionsAShapeThatIsNotDrawn', () => {
+    const unknown = (area: string) => ({ area, label: 'notEnoughData' as const, you: null, them: null });
+    const text = radarSummary([
+      { area: 'Openings', label: 'notYourProblem', you: 9.6, them: 9.0 },
+      { area: 'Middlegames', label: 'notYourProblem', you: 19.9, them: 19.7 },
+      { area: 'Endgames', label: 'gap', you: 10.9, them: 7.9 },
+      unknown("When you're ahead"),
+      unknown("When you're behind"),
+      unknown('Low on the clock'),
+    ]);
+    expect(text).not.toMatch(/shape/i);
+    expect(text.startsWith('Your points against players at your rating, the dashed hexagon.')).toBe(true);
   });
 });
