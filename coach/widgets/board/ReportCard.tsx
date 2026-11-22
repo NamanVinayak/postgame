@@ -2,7 +2,7 @@ import type { App, McpUiHostContext } from '@modelcontextprotocol/ext-apps';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { DEFAULT_REPORT_CTA, type QuickFix, type ReportLeak, type ReportView } from '../../src/server/views';
 import { drillTargets, type DrillRef } from './drill';
-import { ExamplesPanel } from './ExamplesPanel';
+import { ExamplesPanel, reveal } from './ExamplesPanel';
 import { MiniBoard, toMoveText } from './MiniBoard';
 import { arrowFor, type Arrow } from './shared';
 import './report.css';
@@ -206,11 +206,15 @@ export function ReportCard({
         }
       : undefined;
 
-  // Back from the panel: the focus returns to the button that opened it.
+  // Back from the panel: the focus returns to the button that opened it, and it is brought on
+  // screen (again once the host has grown the frame back to the card's height).
   useEffect(() => {
     if (drill || !returnTo.current) return;
-    card.current?.querySelector<HTMLElement>(`[data-drill="${returnTo.current}"]`)?.focus();
+    const el = card.current?.querySelector<HTMLElement>(`[data-drill="${returnTo.current}"]`);
     returnTo.current = null;
+    if (!el) return;
+    el.focus({ preventScroll: true });
+    return reveal(el, 'center');
   }, [drill]);
 
   const openHero = openDrill(targets.hero, 'hero', 'Examples from your games');
