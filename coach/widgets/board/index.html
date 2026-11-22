@@ -6,11 +6,21 @@
     <meta name="color-scheme" content="light dark" />
     <title>Postgame Coach board</title>
     <style>
+      /* Theme tokens. The host's theme (data-theme, set from onhostcontextchanged) wins;
+         without one, the OS setting (prefers-color-scheme) decides. Keep both dark blocks equal. */
       :root {
         --pg-text: #1f2328;
         --pg-muted: #59636e;
         --pg-border: #d0d7de;
         --pg-button-bg: #f6f8fa;
+        --pg-surface: #f6f8fa;
+        --pg-track: #e4e8ec;
+        --pg-bad: #cf222e;
+        --pg-good: #1a7f37;
+        --pg-neutral: #6e7781;
+        --pg-band-bad: rgba(207, 34, 46, 0.22);
+        --pg-band-good: rgba(26, 127, 55, 0.2);
+        --pg-band-neutral: rgba(110, 119, 129, 0.25);
       }
       @media (prefers-color-scheme: dark) {
         :root:not([data-theme='light']) {
@@ -18,6 +28,14 @@
           --pg-muted: #9198a1;
           --pg-border: #3d444d;
           --pg-button-bg: #212830;
+          --pg-surface: #1b2029;
+          --pg-track: #2d333d;
+          --pg-bad: #ff7b72;
+          --pg-good: #3fb950;
+          --pg-neutral: #9198a1;
+          --pg-band-bad: rgba(255, 123, 114, 0.3);
+          --pg-band-good: rgba(63, 185, 80, 0.28);
+          --pg-band-neutral: rgba(145, 152, 161, 0.3);
         }
       }
       :root[data-theme='dark'] {
@@ -25,6 +43,14 @@
         --pg-muted: #9198a1;
         --pg-border: #3d444d;
         --pg-button-bg: #212830;
+        --pg-surface: #1b2029;
+        --pg-track: #2d333d;
+        --pg-bad: #ff7b72;
+        --pg-good: #3fb950;
+        --pg-neutral: #9198a1;
+        --pg-band-bad: rgba(255, 123, 114, 0.3);
+        --pg-band-good: rgba(63, 185, 80, 0.28);
+        --pg-band-neutral: rgba(145, 152, 161, 0.3);
       }
       html,
       body {

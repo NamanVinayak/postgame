@@ -3,10 +3,18 @@ import { fileURLToPath } from 'node:url';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { RESOURCE_MIME_TYPE, registerAppResource } from '@modelcontextprotocol/ext-apps/server';
 
-/** The ui:// resource that renders a chess position inside an MCP Apps host. */
+/**
+ * The ui:// resource for the coach widget inside an MCP Apps host. One widget, three views
+ * (answer board, question board, report card), switched by `structuredContent.kind`; see
+ * views.ts for `CoachView` and the mappers that build it.
+ */
 export const BOARD_URI = 'ui://postgame-coach/board';
 
-/** What the board widget draws. Tools linked to BOARD_URI return this as `structuredContent`. */
+/**
+ * What the answer board draws. Tools linked to BOARD_URI return it as `structuredContent`
+ * inside a `CoachView` of kind 'answer' (views.ts). `bestUci`/`bestSan` are null when the
+ * played move was the best one; the board then draws the played move in green.
+ */
 export interface BoardView {
   fen: string;
   orientation: 'white' | 'black';
@@ -36,7 +44,10 @@ export function registerBoardResource(server: McpServer): void {
     server,
     'Postgame Coach board',
     BOARD_URI,
-    { description: 'Chess board showing a position, the move played and the engine best move' },
+    {
+      description:
+        'Postgame Coach board: a position with the move played and the engine best move, a position to try a move in, or a report card',
+    },
     async () => ({
       contents: [{ uri: BOARD_URI, mimeType: RESOURCE_MIME_TYPE, text: readFileSync(BOARD_HTML_PATH, 'utf8') }],
     }),
