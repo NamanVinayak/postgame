@@ -6,7 +6,15 @@ import {
   toQuestionView,
   toReportView,
   toStatusView,
+  costlyMovesText,
+  heroFromConversion,
+  heroFromTimeLosses,
+  legacyReportToV4,
+  quickFixFromPosition,
   type DiagnosisLike,
+  type LegacyReportView,
+  type QuickFix,
+  type ReportView,
   type ReportLabel,
   type ReportPosition,
 } from './views';
@@ -251,7 +259,7 @@ describe('toReportView with focus positions', () => {
       if (view.kind !== 'report') throw new Error('not a report');
       // No new keys appear when the caller passes none, so old callers see the old shape.
       expect(Object.keys(view).sort()).toEqual(['focus', 'games', 'headline', 'kind', 'rows', 'timeClass']);
-      expect(parseCoachView(JSON.parse(JSON.stringify(view)))).toEqual(view);
+      expect(parseCoachView(JSON.parse(JSON.stringify(view)))).toEqual(legacyReportToV4(view));
     }
   });
 
@@ -277,13 +285,13 @@ describe('toReportView with focus positions', () => {
     expect(view.positions?.[1].wrongUci).toBeNull();
     expect(view.positions?.[1].opening).toBeNull();
     expect(view.positions?.[2].lossPts).toBe(21.4);
-    expect(parseCoachView(JSON.parse(JSON.stringify(view)))).toEqual(view);
+    expect(parseCoachView(JSON.parse(JSON.stringify(view)))).toEqual(legacyReportToV4(view));
   });
 
   it('reportViewRejectsBadPosition', () => {
     const good = toReportView(d, 'h', { positions: [position()], subhead: 's', cta: 'Go' });
     if (good.kind !== 'report') throw new Error('not a report');
-    expect(parseCoachView(good)).toEqual(good);
+    expect(parseCoachView(good)).toEqual(legacyReportToV4(good));
 
     const bad: Record<string, unknown>[] = [
       { fen: 'r1bqkbnr/pp1p1ppp/2n1p3/8/3NP3/2N5/PPP2PPP b KQkq - 0 5' }, // 7 ranks
@@ -319,7 +327,7 @@ describe('toReportView with focus positions', () => {
       const mapped = toReportView(d, 'h', { positions: [{ ...position(), ...over } as ReportPosition, position()] });
       if (mapped.kind !== 'report') throw new Error('not a report');
       expect(mapped.positions, JSON.stringify(over)).toEqual([{ ...position(), lossPts: 13.6 }]);
-      expect(parseCoachView(JSON.parse(JSON.stringify(mapped)))).toEqual(mapped);
+      expect(parseCoachView(JSON.parse(JSON.stringify(mapped)))).toEqual(legacyReportToV4(mapped));
     }
     // Report-level fields.
     for (const over of [
@@ -336,7 +344,7 @@ describe('toReportView with focus positions', () => {
       const mapped = toReportView(d, 'h', { positions: [position()], cta });
       if (mapped.kind !== 'report') throw new Error('not a report');
       expect(mapped.cta, JSON.stringify(cta)).toBeUndefined();
-      expect(parseCoachView(JSON.parse(JSON.stringify(mapped)))).toEqual(mapped);
+      expect(parseCoachView(JSON.parse(JSON.stringify(mapped)))).toEqual(legacyReportToV4(mapped));
     }
   });
 });
@@ -397,10 +405,13 @@ describe('toStatusView', () => {
 
 describe('parseCoachView', () => {
   it('acceptsEveryMapperOutput', () => {
-    const report = toReportView(diagnosis([area({ area: 'endgame', label: 'gap', ci95: [1, 3] })]), 'h');
-    for (const view of [toAnswerView(facts()), toQuestionView(facts(), PROMPT), report]) {
+    const report = toReportView(spikeReport(), { positions: [board()], quickFixes: [quick(false)] });
+    for (const view of [toAnswerView(facts()), toQuestionView(facts(), PROMPT), report, toStatusView('t', 'm')]) {
       expect(parseCoachView(JSON.parse(JSON.stringify(view)))).toEqual(view);
     }
+    // A v3 report (still sent by tools.ts until P3) comes back as its v4 card.
+    const legacy = toReportView(diagnosis([area({ area: 'endgame', label: 'gap', ci95: [1, 3] })]), 'h');
+    expect(parseCoachView(JSON.parse(JSON.stringify(legacy)))).toEqual(legacyReportToV4(legacy));
   });
 
   it('rejectsMalformedViews', () => {
@@ -421,5 +432,289 @@ describe('parseCoachView', () => {
       { ...report, rows: Array.from({ length: 7 }, () => (report.kind === 'report' ? report.rows[0] : {})) },
     ];
     for (const x of bad) expect(parseCoachView(x)).toBeNull();
+  });
+});
+
+// ---- Report card v4 (spec §6c) ----
+
+// P1's LeakReport, copied from its brief (and branch cf46caf) so the test proves a real one is
+// assignable to LeakReportLike: the fixture is held in a variable of this type, not a fresh literal.
+type TimeClass = 'bullet' | 'blitz' | 'rapid' | 'daily';
+type LeakKey = 'clock' | 'winning' | 'losing' | 'opening' | 'endgame' | 'middlegame';
+interface Leak { key: LeakKey; label: string; sharePct: number; shareRange: [number, number]; bigMistakesPerGame: number; givenAwayPer10: number; oppGivenAwayPer10: number; moves: number }
+interface Conversion { winningGames: number; won: number; drawn: number; lost: number; convertedPct: number; lostShareOfLossesPct: number; lostShareRange: [number, number]; oppWinningGames: number; oppConvertedPct: number }
+interface TimeLosses { losses: number; onTime: number; sharePct: number }
+interface WhatIf { label: string; extraScorePerGame: number; ratingPoints: number }
+type LeakFocus = { kind: 'keepTheWin' } | { kind: 'clock' } | { kind: 'leak'; key: LeakKey };
+interface LeakReport { usernames: string[]; timeClass: TimeClass; games: number; asOf: number; avgScore: number; leaks: Leak[]; conversion: Conversion; timeLosses: TimeLosses; whatIf: WhatIf | null; focus: LeakFocus; notes: string[] }
+
+const leak = (key: LeakKey, label: string, sharePct: number, bigMistakesPerGame: number): Leak => ({
+  key, label, sharePct, shareRange: [sharePct - 3, sharePct + 3], bigMistakesPerGame, givenAwayPer10: 1, oppGivenAwayPer10: 1, moves: 100,
+});
+
+/** Shaped like the controller's 900-game spike (fixture numbers; not engine output). */
+function spikeReport(over: Partial<LeakReport> = {}): LeakReport {
+  const r: LeakReport = {
+    usernames: ['player'],
+    timeClass: 'blitz',
+    games: 900,
+    asOf: 0,
+    avgScore: 0.5,
+    // Deliberately not in rank order: the mapper ranks them.
+    leaks: [
+      leak('winning', "When you're already winning", 24.2, 1.04),
+      leak('middlegame', 'Balanced middlegames', 35.4, 1.83),
+      leak('opening', 'Your first 10 moves', 20.6, 0.79),
+      leak('clock', 'Low on the clock', 9.8, 0.4),
+      leak('losing', "When you're already losing", 6.6, 0.3),
+      leak('endgame', 'Endgames', 3.9, 0.2),
+    ],
+    conversion: { winningGames: 493, won: 340, drawn: 11, lost: 142, convertedPct: 69, lostShareOfLossesPct: 31.7, lostShareRange: [28, 35], oppWinningGames: 480, oppConvertedPct: 69.3 },
+    timeLosses: { losses: 448, onTime: 72, sharePct: 16.1 },
+    whatIf: { label: 'if you threw away half as many won positions', extraScorePerGame: 0.08, ratingPoints: 54 },
+    focus: { kind: 'keepTheWin' },
+    notes: [],
+    ...over,
+  };
+  return r;
+}
+
+const WIN_FEN = 'r1bq1rk1/ppp2ppp/2n5/3np3/2B5/2N2N2/PPPP1PPP/R1BQR1K1 w - - 0 9';
+const board = (over: Record<string, unknown> = {}) => ({ fen: WIN_FEN, orientation: 'white' as const, ...over });
+const quick = (revealed: boolean): QuickFix => ({
+  fen: 'r1bqkbnr/pp1p1ppp/2n1p3/8/3NP3/2N5/PPP2PPP/R1BQKB1R b KQkq - 0 5',
+  orientation: 'black',
+  label: 'Sicilian Defense: Taimanov Variation',
+  times: '8 of 9 games',
+  wrongSan: ['g6', 'd5'],
+  wrongUci: 'g7g6',
+  revealed,
+  bestSan: 'Nf6',
+  bestUci: 'g8f6',
+});
+const v4 = (x: ReportView | LegacyReportView): ReportView => {
+  if (!('hero' in x)) throw new Error('not a v4 report');
+  return x;
+};
+
+describe('report card v4', () => {
+  it('reportV4RoundTrips', () => {
+    const view = v4(
+      toReportView(spikeReport(), {
+        positions: [board(), board({ orientation: 'black', fen: '6k1/5ppp/8/8/8/8/1q3PPP/3R2K1 b - - 0 30' }), board()],
+        drillsDone: 0,
+        drillsTotal: 20,
+        quickFixes: [quick(false)],
+        cta: "Start this week's training",
+      }),
+    );
+    expect(view.hero).toEqual({
+      headline: 'You were winning in 493 games, and lost 142 of them.',
+      sub: '1 in 3 of your losses were games you were winning.',
+    });
+    expect(view.leaks.map((l) => [l.label, l.sharePct, l.range, l.detail])).toEqual([
+      ['Balanced middlegames', 35, [32, 38], 'About 2 costly moves per game'],
+      ["When you're already winning", 24, [21, 27], 'About 1 costly move per game'],
+      ['Your first 10 moves', 21, [18, 24], 'About 1 costly move per game'],
+      ['Low on the clock', 10, [7, 13], '72 of your 448 losses were on time'],
+      ["When you're already losing", 7, [4, 10], 'About 1 costly move every 3 games'],
+      ['Endgames', 4, [1, 7], 'About 1 costly move every 5 games'],
+    ]);
+    expect(view.context).toBe('Your opponents keep the same share of their winning games as you (69%): normal at your level, and the biggest thing you control.');
+    expect(view.focus).toMatchObject({
+      title: 'Keep the win',
+      line: '20 positions from your games where you were winning and let it slip.',
+      estimate: 'About +55 rating points if you halve them (rough estimate)', // rounded to 5
+      drillsDone: 0,
+      drillsTotal: 20,
+    });
+    expect(view.focus.positions).toHaveLength(3);
+    expect(view.focus.positions[0].prompt).toBe("You're winning here. Find the move that keeps it.");
+    expect(parseCoachView(JSON.parse(JSON.stringify(view)))).toEqual(view);
+
+    // Lean: no what-if, no boards, no quick fixes, no button; still a valid card, and no estimate.
+    const lean = v4(toReportView(spikeReport({ whatIf: null })));
+    expect(lean.focus.estimate).toBeUndefined();
+    expect(Object.keys(lean).sort()).toEqual(['context', 'focus', 'games', 'hero', 'kind', 'leaks', 'timeClass']);
+    expect(parseCoachView(JSON.parse(JSON.stringify(lean)))).toEqual(lean);
+
+    // The other focus kinds use their own stat for the hero, and never the "halve them" estimate.
+    const clock = v4(toReportView(spikeReport({ focus: { kind: 'clock' } })));
+    expect(clock.hero).toEqual({ headline: '72 of your 448 losses were on time.', sub: '1 in 6 of your losses came from the clock, not the board.' });
+    expect(clock.focus.title).toBe('Beat the clock');
+    expect(clock.focus.estimate).toBeUndefined();
+    const mid = v4(toReportView(spikeReport({ focus: { kind: 'leak', key: 'middlegame' } })));
+    expect(mid.hero).toEqual({ headline: 'Your biggest leak: balanced middlegames.', sub: '35% of the win chance you give away happens here.' });
+    expect(mid.focus.estimate).toBeUndefined();
+    for (const v of [clock, mid]) expect(parseCoachView(JSON.parse(JSON.stringify(v)))).toEqual(v);
+    // Plain words only.
+    expect(JSON.stringify(view)).not.toMatch(/\bCI\b|bootstrap|p-value|confidence|resampl/i);
+  });
+
+  it('focusPositionsCarryNoAnswers', () => {
+    // The server may hand over richer objects; only fen, orientation and prompt get through.
+    const rich = board({ bestSan: 'Bxf7+', bestUci: 'c4f7', playedSan: 'Re3', bestLineSan: ['Bxf7+', 'Kxf7'], caption: 'Bxf7+ wins' });
+    const view = v4(toReportView(spikeReport(), { positions: [rich as never] }));
+    expect(Object.keys(view.focus.positions[0]).sort()).toEqual(['fen', 'orientation', 'prompt']);
+    expect(JSON.stringify(view.focus)).not.toMatch(/Bxf7|c4f7|Re3|best|played|caption/);
+    // And the widget's check refuses any board that carries anything more.
+    for (const extra of [{ bestSan: 'Bxf7+' }, { bestUci: 'c4f7' }, { playedSan: 'Re3' }, { hint: 'look at f7' }]) {
+      const bad = { ...view, focus: { ...view.focus, positions: [{ ...view.focus.positions[0], ...extra }] } };
+      expect(parseCoachView(bad), JSON.stringify(extra)).toBeNull();
+    }
+    // Bad boards are dropped by the mapper, at most three are kept.
+    const four = v4(toReportView(spikeReport(), { positions: [board(), board({ fen: 'nonsense' }), board(), board(), board()] }));
+    expect(four.focus.positions).toHaveLength(3);
+  });
+
+  it('quickFixHidesAnswerUntilRevealed', () => {
+    const hidden = v4(toReportView(spikeReport(), { quickFixes: [quick(false)] })).quickFixes?.[0];
+    expect(hidden).toMatchObject({ revealed: false, bestSan: null, bestUci: null, wrongSan: ['g6', 'd5'], times: '8 of 9 games' });
+    expect(JSON.stringify(hidden)).not.toMatch(/Nf6|g8f6/);
+    const shown = v4(toReportView(spikeReport(), { quickFixes: [quick(true)] })).quickFixes?.[0];
+    expect(shown).toMatchObject({ revealed: true, bestSan: 'Nf6', bestUci: 'g8f6' });
+
+    // The widget's check: an unrevealed answer, or a revealed one that isn't a move, is refused.
+    const base = v4(toReportView(spikeReport(), { quickFixes: [quick(false)] }));
+    for (const q of [{ ...quick(false) }, { ...quick(false), bestSan: null }, { ...quick(true), bestSan: 'not a move' }, { ...quick(false), extra: 1 }]) {
+      expect(parseCoachView({ ...base, quickFixes: [q] }), JSON.stringify(q).slice(0, 60)).toBeNull();
+    }
+    expect(parseCoachView({ ...base, quickFixes: [quick(true)] })).not.toBeNull();
+
+    // From a repeated position: hidden until revealed.
+    const rep = position();
+    expect(quickFixFromPosition(rep, false)).toMatchObject({ bestSan: null, bestUci: null, times: '8 of 9 games', label: 'Sicilian Defense: Taimanov Variation' });
+    expect(quickFixFromPosition(rep, true)).toMatchObject({ bestSan: 'Nf6', bestUci: 'g8f6' });
+
+    // A v3 report from tools.ts (its positions still carry the best move) shows on the v4 card
+    // with the answers hidden.
+    const legacy: LegacyReportView = toReportView(diagnosis([area({ area: 'endgame', label: 'notYourProblem' })], { kind: 'repeated', keys: ['a'] }), 'h', {
+      subhead: 's',
+      positions: [position()],
+    });
+    const shownCard = parseCoachView(JSON.parse(JSON.stringify(legacy)));
+    expect(shownCard).toMatchObject({ kind: 'report', hero: { headline: 'h', sub: 's' }, quickFixes: [{ revealed: false, bestSan: null, bestUci: null }] });
+    expect(JSON.stringify(shownCard)).not.toMatch(/Nf6|g8f6/);
+  });
+
+  it('heroFromConversion', () => {
+    const real = spikeReport().conversion;
+    expect(heroFromConversion(real)).toEqual({
+      headline: 'You were winning in 493 games, and lost 142 of them.',
+      sub: '1 in 3 of your losses were games you were winning.',
+    });
+    const at = (lostShareOfLossesPct: number) => heroFromConversion({ winningGames: 40, lost: 10, lostShareOfLossesPct }).sub;
+    expect(at(50)).toBe('1 in 2 of your losses were games you were winning.');
+    expect(at(70)).toBe('1 in 2 of your losses were games you were winning.'); // N never below 2
+    expect(at(85)).toBe('1 in 2 of your losses were games you were winning.');
+    expect(at(86)).toBe('Almost all of your losses were games you were winning.'); // only above 85%
+    expect(at(20)).toBe('1 in 5 of your losses were games you were winning.');
+    expect(at(23)).toBe('1 in 4 of your losses were games you were winning.'); // 100 / 23 = 4.3
+    expect(at(0)).toBe('None of your losses were games you were winning.');
+    expect(at(97)).toBe('Almost all of your losses were games you were winning.');
+    expect(heroFromConversion({ winningGames: 1, lost: 1, lostShareOfLossesPct: 100 }).headline).toBe('You were winning in 1 game, and lost 1 of them.');
+  });
+
+  it('rejectsMoreThanSixLeaks', () => {
+    const view = v4(toReportView(spikeReport()));
+    const seventh = { label: 'Something else', sharePct: 1, range: [0, 2] as [number, number], detail: '' };
+    expect(parseCoachView({ ...view, leaks: [...view.leaks, seventh] })).toBeNull();
+    // The mapper keeps the six largest.
+    const seven = spikeReport({ leaks: [...spikeReport().leaks, leak('endgame', 'Rook endings', 1, 0.1)] });
+    expect(v4(toReportView(seven)).leaks.map((l) => l.label)).not.toContain('Rook endings');
+    // Bars must be ranked, and each one well formed.
+    const swapped = [view.leaks[1], view.leaks[0], ...view.leaks.slice(2)];
+    const badBars = [
+      swapped,
+      [{ ...view.leaks[0], sharePct: 101 }],
+      [{ ...view.leaks[0], range: [40, 30] }],
+      [{ ...view.leaks[0], sharePct: Number.NaN }],
+      [{ ...view.leaks[0], label: '' }],
+    ];
+    for (const leaks of badBars) expect(parseCoachView({ ...view, leaks }), JSON.stringify(leaks[0]).slice(0, 60)).toBeNull();
+    // Other card-level checks.
+    expect(parseCoachView({ ...view, hero: { headline: '', sub: '' } })).toBeNull();
+    expect(parseCoachView({ ...view, focus: { ...view.focus, drillsDone: 21 } })).toBeNull();
+    expect(parseCoachView({ ...view, cta: '' })).toBeNull();
+  });
+});
+
+describe('report card v4, review fixes', () => {
+  it('heroNamesFocusLeakWithoutMajorityClaim', () => {
+    // The top bar is 35%: a leak, not a majority, so no "one place" or "most".
+    const top = v4(toReportView(spikeReport({ focus: { kind: 'leak', key: 'middlegame' } })));
+    expect(top.hero).toEqual({ headline: 'Your biggest leak: balanced middlegames.', sub: '35% of the win chance you give away happens here.' });
+    // The focus is the second-ranked bar: it is this week's focus, not the biggest leak.
+    const second = v4(toReportView(spikeReport({ focus: { kind: 'leak', key: 'winning' } })));
+    expect(second.hero).toEqual({ headline: "Your focus this week: when you're already winning.", sub: '24% of the win chance you give away happens here.' });
+    for (const h of [top.hero, second.hero]) expect(`${h.headline} ${h.sub}`).not.toMatch(/one place|most|majority|biggest leak: when/i);
+  });
+
+  it('clockHeroAgreesInNumber', () => {
+    expect(heroFromTimeLosses({ losses: 1, onTime: 1, sharePct: 100 }).headline).toBe('1 of your 1 loss was on time.');
+    expect(heroFromTimeLosses({ losses: 448, onTime: 1, sharePct: 0.22 }).headline).toBe('1 of your 448 losses was on time.');
+    expect(heroFromTimeLosses({ losses: 448, onTime: 72, sharePct: 16.07 })).toEqual({
+      headline: '72 of your 448 losses were on time.',
+      sub: '1 in 6 of your losses came from the clock, not the board.',
+    });
+    expect(heroFromTimeLosses({ losses: 10, onTime: 9, sharePct: 90 }).sub).toBe('Almost all of your losses were on time.');
+    expect(heroFromTimeLosses({ losses: 10, onTime: 8, sharePct: 80 }).sub).toBe('1 in 2 of your losses came from the clock, not the board.');
+    // The clock bar's line agrees too.
+    const one = v4(toReportView(spikeReport({ timeLosses: { losses: 448, onTime: 1, sharePct: 0.22 } })));
+    expect(one.leaks.find((l) => l.label === 'Low on the clock')?.detail).toBe('1 of your 448 losses was on time');
+  });
+
+  it('costlyMoveWording', () => {
+    expect(costlyMovesText(1.83)).toBe('About 2 costly moves per game'); // >= 1.5: N rounded
+    expect(costlyMovesText(1.5)).toBe('About 2 costly moves per game');
+    expect(costlyMovesText(3.4)).toBe('About 3 costly moves per game');
+    expect(costlyMovesText(1.49)).toBe('About 1 costly move per game'); // 0.75 to 1.5
+    expect(costlyMovesText(0.75)).toBe('About 1 costly move per game');
+    expect(costlyMovesText(0.74)).toBe('About 1 costly move every 2 games'); // below 0.75: N = max(2, round(1 / x))
+    expect(costlyMovesText(0.6)).toBe('About 1 costly move every 2 games');
+    expect(costlyMovesText(0.35)).toBe('About 1 costly move every 3 games');
+    expect(costlyMovesText(0.3)).toBe('About 1 costly move every 3 games');
+    expect(costlyMovesText(0.29)).toBe('About 1 costly move every 3 games');
+    expect(costlyMovesText(0.2)).toBe('About 1 costly move every 5 games');
+    expect(costlyMovesText(0.04)).toBe('About 1 costly move every 25 games');
+    expect(costlyMovesText(0)).toBe('No costly moves here');
+  });
+
+  it('rangesFlagPassesThroughAndIsChecked', () => {
+    const shaky = v4(toReportView({ ...spikeReport(), rangesReliable: false }));
+    expect(shaky.rangesReliable).toBe(false);
+    expect(parseCoachView(JSON.parse(JSON.stringify(shaky)))).toEqual(shaky);
+    expect('rangesReliable' in v4(toReportView(spikeReport()))).toBe(false); // not given: no key
+    expect(parseCoachView({ ...shaky, rangesReliable: 'no' })).toBeNull();
+  });
+
+  it('legacyConversionTruncatesLongText', () => {
+    const long = 'Your rating is honest and here is a very long headline. '.repeat(8); // > 200 characters
+    const legacy = toReportView(diagnosis([area({ area: 'endgame', label: 'notYourProblem' })], { kind: 'repeated', keys: ['a'] }), long, {
+      subhead: 's'.repeat(260),
+      positions: [position({ opening: `Sicilian Defense: ${'Very Long Sub-Variation '.repeat(8)}` })],
+    });
+    const card = parseCoachView(JSON.parse(JSON.stringify(legacy)));
+    expect(card).not.toBeNull(); // cut to fit, not refused
+    if (!card || card.kind !== 'report') throw new Error('no card');
+    expect(card.hero.headline.length).toBeLessThanOrEqual(200);
+    expect(card.hero.headline.endsWith('…')).toBe(true);
+    expect(card.hero.sub.length).toBeLessThanOrEqual(200);
+    expect(card.quickFixes?.[0].label.length).toBeLessThanOrEqual(80);
+  });
+
+  it('parseReturnsSanitisedReportCopy', () => {
+    const clean = v4(toReportView(spikeReport(), { positions: [board()], quickFixes: [quick(false)], cta: 'Go' }));
+    const dirty = {
+      ...clean,
+      extra: 'top',
+      hero: { ...clean.hero, tooltip: 'x' },
+      leaks: clean.leaks.map((l, i) => (i === 0 ? { ...l, note: 'y' } : l)),
+      focus: { ...clean.focus, secret: 'z' },
+    };
+    const parsed = parseCoachView(JSON.parse(JSON.stringify(dirty)));
+    expect(parsed).toEqual(clean); // unknown keys never survive, at any level
+    expect(JSON.stringify(parsed)).not.toMatch(/tooltip|note|secret|extra/);
+    expect(parsed).not.toBe(dirty); // a copy
   });
 });
