@@ -3,14 +3,20 @@ import type { CachedGame } from '../analysis/cache';
 import { STATS_CFG } from '../config';
 import { AREA_KEYS, AREA_NAMES, gamePlies, type AreaKey } from './areas';
 import { findRepeated, type RepeatedPosition } from './repeated';
-import { bootstrapGap, type GameCounts } from './stats';
+import { bootstrapGap, exactShareP, type GameCounts } from './stats';
 
 /**
  * How an area is labelled. The rules were fixed before looking at any real games:
  * - notEnoughData: either side has moves from fewer than STATS_CFG.minGames games, or fewer
- *   than minMoves moves, in the area.
+ *   than minMoves moves, in the area; or both sides together made fewer than minErrors
+ *   serious mistakes there.
  * - gap: the adjusted range (two-sided, 1 − gapAlpha, allowing for six areas at once) lies
- *   entirely above 0.
+ *   entirely above 0, AND the exact count check agrees: given all the mistakes in the area,
+ *   the chance that at least this many were the player's, if both sides erred at the same
+ *   rate, is below gapAlpha / 2. Resampling games handles mistakes clustering in some games;
+ *   the exact check handles rare mistakes, where resampled ranges come out too narrow. The
+ *   exact check needs whole counts and is skipped (with a note) for a baseline that gives
+ *   fractional ones.
  * - notYourProblem: the 95% range's upper end is below meaningfulGapPts.
  * - noClearDifference: enough data, but the range is too wide to call either way.
  */
@@ -26,6 +32,8 @@ export interface AreaFinding {
   gapPts: number;
   ci95: [number, number];
   ciAdj: [number, number];
+  /** Exact count check: P(at least this many of the mistakes are the player's | same rates). Null when skipped. */
+  exactP: number | null;
   /** Games with any move in this area, by either side. */
   games: number;
   /** Games in which the player / the comparison side made at least one move in this area. */
@@ -96,7 +104,7 @@ export function gameAreaCounts(c: CachedGame): Record<AreaKey, GameCounts> | nul
 
 /** Default baseline: the opponent's own moves in the same game. */
 export const sameGameOpponents: Baseline = {
-  name: 'your opponents in the same games',
+  name: 'players at your rating in the same games',
   perGame(c, area) {
     const t = gameAreaCounts(c)?.[area];
     return { oppErr: t?.oppErr ?? 0, oppN: t?.oppN ?? 0 };
@@ -146,10 +154,25 @@ export function areaFinding(area: AreaKey, rows: GameCounts[]): AreaFinding {
   }
   const { gap, ci95, ciAdj } = bootstrapGap(rows, STATS_CFG.bootstrapN, STATS_CFG.seed);
   const short = [...shortfalls('your', myN, myGames), ...shortfalls('opponent', oppN, oppGames)];
+  const errors = myErr + oppErr;
+  // (With no moves on a side, `short` already says so and the area is not judged.)
+  if (myN > 0 && oppN > 0 && errors < STATS_CFG.minErrors) {
+    const n = Number.isInteger(errors) ? String(errors) : errors.toFixed(1);
+    short.push(
+      `${errors === 0 ? 'no serious mistakes fall' : errors === 1 ? 'only 1 serious mistake falls' : `only ${n} serious mistakes fall`} ` +
+        `here; ${STATS_CFG.minErrors} needed to judge`,
+    );
+  }
+  const exactP = exactShareP(myErr, myN, oppErr, oppN);
+  const extra =
+    exactP === null && short.length === 0
+      ? ['the extra check on mistake counts was skipped: the comparison numbers are not whole counts']
+      : [];
+  const exactAgrees = exactP === null || exactP < STATS_CFG.gapAlpha / 2;
   const label: AreaLabel =
     short.length > 0
       ? 'notEnoughData'
-      : ciAdj[0] > 0
+      : ciAdj[0] > 0 && exactAgrees
         ? 'gap'
         : ci95[1] < STATS_CFG.meaningfulGapPts
           ? 'notYourProblem'
@@ -162,12 +185,13 @@ export function areaFinding(area: AreaKey, rows: GameCounts[]): AreaFinding {
     gapPts: gap,
     ci95,
     ciAdj,
+    exactP,
     games: rows.length,
     myGames,
     oppGames,
     myMoves: myN,
     oppMoves: oppN,
-    notes: ['same games, resampled by game', ...short],
+    notes: ['same games, resampled by game', ...short, ...extra],
   };
 }
 
@@ -192,10 +216,15 @@ function mostCommonTimeClass(games: CachedGame[]): { main: TimeClass; all: TimeC
  * the baseline's (by default, their opponents in the same games), with a range from
  * resampling whole games and a label fixed in advance; plus positions the player keeps
  * getting wrong. The focus is the clearest gap, else the top repeated positions, else none.
+ * Only games of the named accounts are used (matched ignoring case), so accounts the caller
+ * didn't name never mix in.
  */
 export function diagnose(games: CachedGame[], usernames: string[], baseline: Baseline = sameGameOpponents): Diagnosis {
-  const usable = games.filter((c) => gameAreaCounts(c) !== null);
-  const skipped = games.length - usable.length;
+  const named = new Set(usernames.map((u) => u.toLowerCase()));
+  const own = games.filter((c) => named.has(c.game.username.toLowerCase()));
+  const otherAccounts = games.length - own.length;
+  const usable = own.filter((c) => gameAreaCounts(c) !== null);
+  const skipped = own.length - usable.length;
   const n = usable.length;
   const areas = AREA_KEYS.map((a) => areaFinding(a, areaRows(usable, a, baseline)));
   const repeated = findRepeated(usable);
@@ -206,12 +235,12 @@ export function diagnose(games: CachedGame[], usernames: string[], baseline: Bas
       : repeated.length > 0
         ? { kind: 'repeated', keys: repeated.slice(0, 3).map((r) => r.key) }
         : null;
-  const { main: timeClass, all: timeClasses } = mostCommonTimeClass(usable.length ? usable : games);
+  const { main: timeClass, all: timeClasses } = mostCommonTimeClass(usable.length ? usable : own);
 
   const notes: string[] = [];
   if (n === 0) {
     notes.push(
-      games.length === 0
+      own.length === 0
         ? 'No analysed games yet, so nothing can be judged.'
         : 'None of these games could be read, so nothing can be judged.',
     );
@@ -227,7 +256,14 @@ export function diagnose(games: CachedGame[], usernames: string[], baseline: Bas
       'Gaps are in percentage points of moves that were serious mistakes (a mistake or a blunder). ' +
         'Each range shows how far the gap could move with a different set of games like these, ' +
         'counting each game as one unit. An area is only called a gap when a stricter range, which ' +
-        `allows for checking ${AREA_KEYS.length} areas at once, stays above zero.`,
+        `allows for checking ${AREA_KEYS.length} areas at once, stays above zero, and the mistake ` +
+        'counts alone are too lopsided to be chance. An area with fewer than ' +
+        `${STATS_CFG.minErrors} serious mistakes in total is not judged.`,
+    );
+  }
+  if (otherAccounts > 0) {
+    notes.push(
+      `${plural(otherAccounts, 'game')} from other accounts ${otherAccounts === 1 ? 'was' : 'were'} left out.`,
     );
   }
   if (skipped > 0) {
@@ -237,7 +273,7 @@ export function diagnose(games: CachedGame[], usernames: string[], baseline: Bas
   }
   const noClock = usable.filter((c) => c.game.baseSec === 0 || c.game.clocks.every((s) => s === null)).length;
   if (noClock > 0) notes.push(`The time-pressure area needs clock times; ${noClock} of ${n} games had none.`);
-  if (timeClasses.length > 1) notes.push(`These games mix time classes (${timeClasses.join(', ')}); they are pooled.`);
+  if (timeClasses.length > 1) notes.push(`These games mix time classes (${timeClasses.join(', ')}); they are counted together.`);
 
   if (gaps.length > 0) {
     notes.push(`Clearest gap: ${summary(gaps[0], baseline.name)}.`);
@@ -246,7 +282,7 @@ export function diagnose(games: CachedGame[], usernames: string[], baseline: Bas
     if (judged.length === 0) {
       notes.push('No area has enough games to judge yet.');
     } else {
-      notes.push('No area stands out against players at your rating.');
+      notes.push(`Among the areas with enough games, none stands out against ${baseline.name}.`);
       const largest = judged
         .filter((a) => a.label === 'noClearDifference' && a.gapPts > 0)
         .sort((a, b) => b.gapPts - a.gapPts)[0];

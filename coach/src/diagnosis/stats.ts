@@ -79,3 +79,45 @@ export function bootstrapGap(
     ciAdj: [quantile(sorted, half), quantile(sorted, 1 - half)],
   };
 }
+
+
+/** log(n!) for a whole number n, by summing logs (n is a mistake count: at most a few thousand). */
+function logFactorial(n: number): number {
+  let s = 0;
+  for (let i = 2; i <= n; i++) s += Math.log(i);
+  return s;
+}
+
+/**
+ * P(X ≥ x) for X ~ Binomial(k, p), exact. Terms are built and summed in log space, so large
+ * counts never overflow and tiny tails come out as small numbers (or 0), never NaN.
+ */
+export function binomialUpperTail(x: number, k: number, p: number): number {
+  if (x <= 0) return 1;
+  if (x > k || p <= 0) return 0;
+  if (p >= 1) return 1;
+  const lp = Math.log(p);
+  const lq = Math.log1p(-p);
+  const logs: number[] = [];
+  let t = logFactorial(k) - logFactorial(x) - logFactorial(k - x) + x * lp + (k - x) * lq;
+  for (let j = x; j <= k; j++) {
+    logs.push(t);
+    if (j < k) t += Math.log((k - j) / (j + 1)) + lp - lq;
+  }
+  let max = -Infinity;
+  for (const v of logs) if (v > max) max = v;
+  let sum = 0;
+  for (const v of logs) sum += Math.exp(v - max);
+  return Math.min(1, Math.exp(max) * sum);
+}
+
+/**
+ * Exact check that the player's share of the mistakes is too large to be chance. Given the
+ * k = myErr + oppErr mistakes, under "no difference" each one is the player's with probability
+ * myN / (myN + oppN); returns P(at least myErr of them are the player's). Needs whole counts;
+ * returns null otherwise (e.g. a plugged-in baseline giving expected, fractional counts).
+ */
+export function exactShareP(myErr: number, myN: number, oppErr: number, oppN: number): number | null {
+  if (![myErr, myN, oppErr, oppN].every(Number.isInteger) || myN + oppN === 0) return null;
+  return binomialUpperTail(myErr, myErr + oppErr, myN / (myN + oppN));
+}

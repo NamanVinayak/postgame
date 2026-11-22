@@ -1,24 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { STATS_CFG } from '../config';
-import { bootstrapGap, mulberry32, type GameCounts } from './stats';
-import { scatter, testRng } from './testGames';
+import { binomialUpperTail, bootstrapGap, mulberry32, type GameCounts } from './stats';
+import { spreadRows } from './testGames';
 
-/** `games` games of 30 moves per side; `myErr` / `oppErr` errors scattered over all moves of each side. */
-function perGame(games: number, myErr: number, oppErr: number, seed: number): GameCounts[] {
-  const rng = testRng(seed);
-  const mine = scatter(myErr, games * 30, rng);
-  const theirs = scatter(oppErr, games * 30, rng);
-  return Array.from({ length: games }, (_, g) => ({
-    myErr: mine.slice(g * 30, g * 30 + 30).filter(Boolean).length,
-    myN: 30,
-    oppErr: theirs.slice(g * 30, g * 30 + 30).filter(Boolean).length,
-    oppN: 30,
-  }));
-}
+const width = (r: { ci95: [number, number] }) => r.ci95[1] - r.ci95[0];
 
 describe('bootstrapGap', () => {
   it('bootstrapDeterministicAndCentered', () => {
-    const rows = perGame(40, 120, 60, 7); // I err on 10% of 1200 moves, the opponent on 5%
+    const rows = spreadRows(40, 30, 120, 60, 7); // I err on 10% of 1200 moves, the opponent on 5%
     const a = bootstrapGap(rows, STATS_CFG.bootstrapN, STATS_CFG.seed);
     const b = bootstrapGap(rows, STATS_CFG.bootstrapN, STATS_CFG.seed);
     expect(a).toEqual(b);
@@ -34,6 +23,16 @@ describe('bootstrapGap', () => {
     const c = bootstrapGap(rows, STATS_CFG.bootstrapN, STATS_CFG.seed + 1);
     expect(c.gap).toBe(a.gap);
     expect(c.ci95).not.toEqual(a.ci95);
+  });
+
+  it('bunchedMistakesWidenRange', () => {
+    // Same totals (120 vs 60 over 40 games of 30 moves a side); only how they fall across games differs.
+    const even: GameCounts[] = Array.from({ length: 40 }, (_, g) => ({ myErr: 3, myN: 30, oppErr: g % 2 ? 1 : 2, oppN: 30 }));
+    const bunched: GameCounts[] = even.map((r, g) => ({ ...r, myErr: g < 12 ? 10 : 0 }));
+    const e = bootstrapGap(even, STATS_CFG.bootstrapN, STATS_CFG.seed);
+    const b = bootstrapGap(bunched, STATS_CFG.bootstrapN, STATS_CFG.seed);
+    expect(b.gap).toBeCloseTo(e.gap, 10);
+    expect(width(b)).toBeGreaterThan(2 * width(e));
   });
 
   it('uses the ratio of sums, so long games weigh more than short ones', () => {
@@ -58,5 +57,23 @@ describe('bootstrapGap', () => {
     expect(xs).toEqual(Array.from({ length: 1000 }, () => r2()));
     expect(xs.every((x) => x >= 0 && x < 1)).toBe(true);
     expect(Math.abs(xs.reduce((s, x) => s + x, 0) / 1000 - 0.5)).toBeLessThan(0.05);
+  });
+});
+
+describe('binomialUpperTail', () => {
+  it('binomialTailIsExactAndNeverOverflows', () => {
+    // P(X ≥ 18) for X ~ Bin(24, 1/2) = 190051 / 2^24
+    expect(binomialUpperTail(18, 24, 0.5)).toBeCloseTo(190051 / 2 ** 24, 12);
+    expect(binomialUpperTail(7, 7, 0.5)).toBeCloseTo(1 / 128, 12);
+    expect(binomialUpperTail(0, 10, 0.3)).toBe(1);
+    expect(binomialUpperTail(11, 10, 0.3)).toBe(0);
+    // large counts stay finite and sensible
+    const mid = binomialUpperTail(3000, 6000, 0.5);
+    expect(mid).toBeGreaterThan(0.5);
+    expect(mid).toBeLessThan(0.52);
+    const far = binomialUpperTail(5000, 6000, 0.5);
+    expect(Number.isFinite(far)).toBe(true);
+    expect(far).toBeGreaterThanOrEqual(0);
+    expect(far).toBeLessThan(1e-100);
   });
 });
