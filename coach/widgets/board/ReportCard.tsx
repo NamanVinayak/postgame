@@ -1,7 +1,9 @@
 import type { App, McpUiHostContext } from '@modelcontextprotocol/ext-apps';
-import { useState, type CSSProperties } from 'react';
-import { Chessboard, defaultArrowOptions } from 'react-chessboard';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { DEFAULT_REPORT_CTA, type QuickFix, type ReportLeak, type ReportView } from '../../src/server/views';
+import { drillTargets, type DrillRef } from './drill';
+import { ExamplesPanel } from './ExamplesPanel';
+import { MiniBoard, toMoveText } from './MiniBoard';
 import { arrowFor, type Arrow } from './shared';
 import './report.css';
 
@@ -18,13 +20,10 @@ const WRONG_ARROW = 'rgba(180, 46, 36, 0.9)';
 const BEST_ARROW = 'rgba(27, 110, 62, 0.92)';
 const WRONG_SQUARE = 'radial-gradient(circle, rgba(180, 46, 36, 0.5) 0 58%, rgba(180, 46, 36, 0.28) 60%)';
 const BEST_SQUARE = 'radial-gradient(circle, rgba(27, 110, 62, 0.5) 0 58%, rgba(27, 110, 62, 0.28) 60%)';
-// Small boards need thicker arrows to read.
-const MINI_ARROWS = { ...defaultArrowOptions, arrowWidthDenominator: 4 };
 
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 /** What "costly move" means, in one plain line under the bars (a mistake or blunder in the analysis). */
 const COSTLY_MOVE = 'Costly move = a move that drops your winning chances by 10% or more (for example from 60% to 48%).';
-const toMoveText = (fen: string) => (fen.split(' ')[1] === 'w' ? 'White to move' : 'Black to move');
 const orList = (moves: string[]) =>
   moves.map((san, i) => (
     <span key={i}>
@@ -32,44 +31,6 @@ const orList = (moves: string[]) =>
       <s className="rc-wrong">{san}</s>
     </span>
   ));
-
-/** A small, still board. Lesson boards get no arrows at all; quick fixes show the usual wrong move. */
-function MiniBoard({
-  id,
-  fen,
-  orientation,
-  arrows = [],
-  squareStyles = {},
-  label,
-}: {
-  id: string;
-  fen: string;
-  orientation: 'white' | 'black';
-  arrows?: Arrow[];
-  squareStyles?: Record<string, CSSProperties>;
-  label: string;
-}) {
-  return (
-    <div className="rc-mini" role="img" aria-label={label}>
-      <Chessboard
-        options={{
-          id,
-          position: fen,
-          boardOrientation: orientation,
-          arrows,
-          arrowOptions: MINI_ARROWS,
-          squareStyles,
-          allowDragging: false,
-          allowDrawingArrows: false,
-          showNotation: false,
-          showAnimations: false,
-          darkSquareStyle: { backgroundColor: 'var(--rc-sq-dark)' },
-          lightSquareStyle: { backgroundColor: 'var(--rc-sq-light)' },
-        }}
-      />
-    </div>
-  );
-}
 
 /**
  * The bars' scale: one straight scale from 0 for every bar, up to the next ten above the
@@ -82,31 +43,47 @@ function barScale(leaks: ReportLeak[]): number {
 
 /**
  * One ranked bar: the share as a solid bar, the likely range as a soft band around it (only when
- * the ranges can be trusted), and one plain line under it.
+ * the ranges can be trusted), and one plain line under it. With `onOpen` (the bar has a drill
+ * ref) the whole bar is a button that opens its examples; spans inside, so the button stays
+ * valid HTML.
  */
-function LeakBar({ leak, max, showRange }: { leak: ReportLeak; max: number; showRange: boolean }) {
+function LeakBar({ leak, max, showRange, index, onOpen }: { leak: ReportLeak; max: number; showRange: boolean; index: number; onOpen?: () => void }) {
   const at = (v: number) => `${(Math.min(max, Math.max(0, v)) / max) * 100}%`;
   const [lo, hi] = leak.range;
   const label =
     `${leak.label}: ${leak.sharePct}% of the winning chances you gave away` +
     (showRange ? ` (likely ${lo} to ${hi}%)` : '') +
     (leak.detail ? `. ${capitalize(leak.detail)}.` : '.');
-  return (
-    <li className="rc-leak">
-      <div className="rc-leakHead">
+  const body = (
+    <span className="rc-leakBody">
+      <span className="rc-leakHead">
         <span className="rc-leakLabel">{leak.label}</span>
         <span className="rc-leakPct">{leak.sharePct}%</span>
-      </div>
-      <div className="rc-leakTrack" role="img" aria-label={label}>
-        {showRange && <div className="rc-leakRange" style={{ left: at(lo), width: `calc(${at(hi)} - ${at(lo)})` }} />}
-        <div className="rc-leakFill" style={{ width: at(leak.sharePct) }} />
-      </div>
-      {leak.detail && <div className="rc-leakDetail">{capitalize(leak.detail)}</div>}
+      </span>
+      <span className="rc-leakTrack" role="img" aria-label={label}>
+        {showRange && <span className="rc-leakRange" style={{ left: at(lo), width: `calc(${at(hi)} - ${at(lo)})` }} />}
+        <span className="rc-leakFill" style={{ width: at(leak.sharePct) }} />
+      </span>
+      {leak.detail && <span className="rc-leakDetail">{capitalize(leak.detail)}</span>}
+    </span>
+  );
+  return (
+    <li className="rc-leak">
+      {onOpen ? (
+        <button type="button" className="rc-leakBtn" data-drill={`bar-${index}`} onClick={onOpen} aria-label={`${label} See examples from your games.`}>
+          {body}
+          <span className="rc-leakGo" aria-hidden="true">
+            ›
+          </span>
+        </button>
+      ) : (
+        body
+      )}
     </li>
   );
 }
 
-function QuickFixCard({ q, index }: { q: QuickFix; index: number }) {
+function QuickFixCard({ q, index, onOpen }: { q: QuickFix; index: number; onOpen?: () => void }) {
   const shown = q.revealed && q.bestSan !== null && q.bestUci !== null;
   const missing = q.revealed && !shown; // tried, but there is no answer to show
   const arrows = [shown ? arrowFor(q.bestUci, BEST_ARROW) : null, arrowFor(q.wrongUci, WRONG_ARROW)].filter((a): a is Arrow => a !== null);
@@ -137,12 +114,35 @@ function QuickFixCard({ q, index }: { q: QuickFix; index: number }) {
             Answer after you try it
           </div>
         )}
+        {onOpen && (
+          <div>
+            <button
+              type="button"
+              className="rc-fixGo"
+              data-drill={`fix-${index}`}
+              onClick={onOpen}
+              aria-label={`See the games that reached this position: ${q.label}`}
+            >
+              See the games <span aria-hidden="true">→</span>
+            </button>
+          </div>
+        )}
       </div>
     </article>
   );
 }
 
+/** The hero's cue: neutral, so it never claims the hero's own number (the clock hero counts losses on time). */
+const HERO_CUE = 'See examples from your games';
+
 type Sent = 'idle' | 'sending' | 'sent' | 'failed';
+
+/** The drill-down that's open: what it shows, which button opened it (focus goes back there), its heading while loading. */
+interface OpenDrill {
+  ref: DrillRef;
+  from: string;
+  title: string;
+}
 
 /**
  * The report card (spec §6c), in a bright "paper" look that stays the same in light and dark
@@ -155,6 +155,11 @@ type Sent = 'idle' | 'sending' | 'sent' | 'failed';
  * Inline it is one column; "Expand" asks the host for fullscreen (shown only when the host
  * offers it), where the bars sit on the left and the lesson on the right. Parts with nothing in
  * them (no bars, no boards, no drills) are left out rather than shown empty.
+ *
+ * Drill-down (plan Task P6): the hero, each bar and each quick fix that carries a ref is a button.
+ * It swaps the card's body for the examples panel (coach_examples with the card's query); "Back to
+ * report" brings the card back and returns the focus to the button. Without refs (an older
+ * payload) nothing is clickable.
  */
 export function ReportCard({
   app,
@@ -168,6 +173,10 @@ export function ReportCard({
   onDisplayMode: (mode: DisplayMode) => void;
 }) {
   const [sent, setSent] = useState<Sent>('idle');
+  const [drill, setDrill] = useState<OpenDrill | null>(null);
+  const card = useRef<HTMLElement>(null);
+  const returnTo = useRef<string | null>(null);
+  const targets = drillTargets(view);
   const full = display.mode === 'fullscreen';
   const canExpand = !full && display.available.includes('fullscreen');
   const canCollapse = full && display.available.includes('inline');
@@ -189,6 +198,25 @@ export function ReportCard({
     }
   };
 
+  const openDrill = (ref: DrillRef | null, from: string, title: string) =>
+    ref
+      ? () => {
+          returnTo.current = from;
+          setDrill({ ref, from, title });
+        }
+      : undefined;
+
+  // Back from the panel: the focus returns to the button that opened it.
+  useEffect(() => {
+    if (drill || !returnTo.current) return;
+    card.current?.querySelector<HTMLElement>(`[data-drill="${returnTo.current}"]`)?.focus();
+    returnTo.current = null;
+  }, [drill]);
+
+  const openHero = openDrill(targets.hero, 'hero', 'Examples from your games');
+  const anyBar = targets.bars.some((t) => t !== null);
+  const anyFix = targets.fixes.some((t) => t !== null);
+
   const start = async () => {
     setSent('sending');
     try {
@@ -200,7 +228,7 @@ export function ReportCard({
   };
 
   return (
-    <article className="rc" data-mode={full ? 'fullscreen' : 'inline'}>
+    <article className="rc" data-mode={full ? 'fullscreen' : 'inline'} ref={card}>
       <header className="rc-head">
         <div className="rc-topline">
           <span className="rc-eyebrow">Postgame Coach</span>
@@ -218,98 +246,117 @@ export function ReportCard({
             </button>
           )}
         </div>
-        <h2 className="rc-hero">
-          <span className="rc-heroLine">{view.hero.headline}</span>
-          {view.hero.sub && <em className="rc-heroSub">{view.hero.sub}</em>}
-        </h2>
-      </header>
-
-      <div className="rc-body">
-        {(view.leaks.length > 0 || view.context) && (
-          <section className="rc-left">
-            {view.leaks.length > 0 && (
-              <section className="rc-leaks" aria-label="Where your lost winning chances go">
-                <h3 className="rc-secTitle">Where your lost winning chances go</h3>
-                <p className="rc-secNote">
-                  Share of all the winning chances you gave away
-                  {showRange && (
-                    <>
-                      {' · '}
-                      <i className="rc-kRange" aria-hidden="true" /> likely range
-                    </>
-                  )}
-                </p>
-                <ol className="rc-leakList">
-                  {view.leaks.map((l, i) => (
-                    <LeakBar key={i} leak={l} max={max} showRange={showRange} />
-                  ))}
-                </ol>
-                <p className="rc-costly">{COSTLY_MOVE}</p>
-                {!showRange && <p className="rc-costly">Too few games to show how sure these numbers are.</p>}
-              </section>
-            )}
-            {view.context && <p className="rc-context">{view.context}</p>}
-          </section>
-        )}
-
-        <section className="rc-right">
-          <section className="rc-focus" aria-label={`This week: ${focus.title}`}>
-            <div className="rc-kicker">This week</div>
-            <h3 className="rc-focusTitle">{focus.title}</h3>
-            {focus.line && <p className="rc-focusLine">{focus.line}</p>}
-            {focus.estimate && <p className="rc-estimate">{focus.estimate}</p>}
-            {focus.positions.length > 0 && (
+        {!drill && (
+          <h2 className="rc-hero">
+            {openHero ? (
+              <button type="button" className="rc-heroBtn" data-drill="hero" onClick={openHero}>
+                <span className="rc-heroLine">{view.hero.headline}</span>
+                {view.hero.sub && <em className="rc-heroSub">{view.hero.sub}</em>}
+                <span className="rc-seeMore">
+                  {HERO_CUE} <span aria-hidden="true">→</span>
+                </span>
+              </button>
+            ) : (
               <>
-                {onePrompt && <p className="rc-prompt">{onePrompt}</p>}
-                <div className="rc-boards">
-                  {focus.positions.map((p, i) => (
-                    <figure key={i} className="rc-boardFig">
-                      <MiniBoard id={`rc-focus-${i}`} fen={p.fen} orientation={p.orientation} label={`${toMoveText(p.fen)}. ${p.prompt}`} />
-                      <figcaption>{onePrompt ? toMoveText(p.fen) : `${toMoveText(p.fen)}. ${p.prompt}`}</figcaption>
-                    </figure>
-                  ))}
-                </div>
+                <span className="rc-heroLine">{view.hero.headline}</span>
+                {view.hero.sub && <em className="rc-heroSub">{view.hero.sub}</em>}
               </>
             )}
-            {focus.drillsTotal > 0 && (
-              <div className="rc-progress">
-                <div
-                  className="rc-bar"
-                  role="progressbar"
-                  aria-valuemin={0}
-                  aria-valuemax={focus.drillsTotal}
-                  aria-valuenow={focus.drillsDone}
-                  aria-label="Drills done this week"
-                >
-                  <div className="rc-fill" style={{ width: `${share * 100}%` }} />
-                </div>
-                <span>
-                  {focus.drillsDone} / {focus.drillsTotal}
-                </span>
-              </div>
-            )}
-          </section>
+          </h2>
+        )}
+      </header>
 
-          {fixes.length > 0 && (
-            <section className="rc-fixes" aria-label="Quick fixes">
-              <h3 className="rc-secTitle">Quick fixes</h3>
-              <p className="rc-secNote">Positions you keep reaching</p>
-              <div className="rc-fixList">
-                {fixes.map((q, i) => (
-                  <QuickFixCard key={i} q={q} index={i} />
-                ))}
-              </div>
+      {drill ? (
+        <ExamplesPanel key={drill.from} app={app} drill={drill.ref} query={view.query} onBack={() => setDrill(null)} fallbackTitle={drill.title} />
+      ) : (
+        <div className="rc-body">
+          {(view.leaks.length > 0 || view.context) && (
+            <section className="rc-left">
+              {view.leaks.length > 0 && (
+                <section className="rc-leaks" aria-label="Where your lost winning chances go">
+                  <h3 className="rc-secTitle">Where your lost winning chances go</h3>
+                  <p className="rc-secNote">
+                    Share of all the winning chances you gave away
+                    {showRange && (
+                      <>
+                        {' · '}
+                        <i className="rc-kRange" aria-hidden="true" /> likely range
+                      </>
+                    )}
+                  </p>
+                  {anyBar && <p className="rc-secNote">Tap a bar to see examples from your games.</p>}
+                  <ol className="rc-leakList">
+                    {view.leaks.map((l, i) => (
+                      <LeakBar key={i} index={i} leak={l} max={max} showRange={showRange} onOpen={openDrill(targets.bars[i], `bar-${i}`, l.label)} />
+                    ))}
+                  </ol>
+                  <p className="rc-costly">{COSTLY_MOVE}</p>
+                  {!showRange && <p className="rc-costly">Too few games to show how sure these numbers are.</p>}
+                </section>
+              )}
+              {view.context && <p className="rc-context">{view.context}</p>}
             </section>
           )}
 
-          <button type="button" className="rc-cta" onClick={() => void start()} disabled={sent === 'sending'}>
-            <span>{cta}</span>
-            <span aria-hidden="true">→</span>
-          </button>
-          {sent === 'sent' && <p className="rc-status">It's in your chat box. Press Enter to start.</p>}
-          {sent === 'failed' && <p className="rc-status">Type “{cta}” in the chat to begin.</p>}
-        </section>
-      </div>
+          <section className="rc-right">
+            <section className="rc-focus" aria-label={`This week: ${focus.title}`}>
+              <div className="rc-kicker">This week</div>
+              <h3 className="rc-focusTitle">{focus.title}</h3>
+              {focus.line && <p className="rc-focusLine">{focus.line}</p>}
+              {focus.estimate && <p className="rc-estimate">{focus.estimate}</p>}
+              {focus.positions.length > 0 && (
+                <>
+                  {onePrompt && <p className="rc-prompt">{onePrompt}</p>}
+                  <div className="rc-boards">
+                    {focus.positions.map((p, i) => (
+                      <figure key={i} className="rc-boardFig">
+                        <MiniBoard id={`rc-focus-${i}`} fen={p.fen} orientation={p.orientation} label={`${toMoveText(p.fen)}. ${p.prompt}`} />
+                        <figcaption>{onePrompt ? toMoveText(p.fen) : `${toMoveText(p.fen)}. ${p.prompt}`}</figcaption>
+                      </figure>
+                    ))}
+                  </div>
+                </>
+              )}
+              {focus.drillsTotal > 0 && (
+                <div className="rc-progress">
+                  <div
+                    className="rc-bar"
+                    role="progressbar"
+                    aria-valuemin={0}
+                    aria-valuemax={focus.drillsTotal}
+                    aria-valuenow={focus.drillsDone}
+                    aria-label="Drills done this week"
+                  >
+                    <div className="rc-fill" style={{ width: `${share * 100}%` }} />
+                  </div>
+                  <span>
+                    {focus.drillsDone} / {focus.drillsTotal}
+                  </span>
+                </div>
+              )}
+            </section>
+
+            {fixes.length > 0 && (
+              <section className="rc-fixes" aria-label="Quick fixes">
+                <h3 className="rc-secTitle">Quick fixes</h3>
+                <p className="rc-secNote">Positions you keep reaching{anyFix ? ' · tap one to see the games' : ''}</p>
+                <div className="rc-fixList">
+                  {fixes.map((q, i) => (
+                    <QuickFixCard key={i} q={q} index={i} onOpen={openDrill(targets.fixes[i] ?? null, `fix-${i}`, q.label)} />
+                  ))}
+                </div>
+              </section>
+            )}
+
+            <button type="button" className="rc-cta" onClick={() => void start()} disabled={sent === 'sending'}>
+              <span>{cta}</span>
+              <span aria-hidden="true">→</span>
+            </button>
+            {sent === 'sent' && <p className="rc-status">It's in your chat box. Press Enter to start.</p>}
+            {sent === 'failed' && <p className="rc-status">Type “{cta}” in the chat to begin.</p>}
+          </section>
+        </div>
+      )}
     </article>
   );
 }

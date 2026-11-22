@@ -34,6 +34,8 @@
   --rc-card-shadow: 0 1px 0 rgba(0, 0, 0, 0.03), 0 12px 24px -16px rgba(60, 40, 10, 0.25);
   --rc-board-shadow: 0 1px 0 rgba(0, 0, 0, 0.04), 0 8px 18px -10px rgba(60, 40, 10, 0.35);
   --rc-serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, serif;
+  --rc-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, 'Segoe UI', sans-serif;
+  --rc-hover: rgba(22, 19, 15, 0.045);
 
   position: relative;
   box-sizing: border-box;
@@ -44,7 +46,7 @@
   box-shadow: var(--rc-shadow);
   color: var(--rc-ink);
   color-scheme: light;
-  font: 14px/1.45 -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, 'Segoe UI', sans-serif;
+  font: 14px/1.45 var(--rc-sans);
   -webkit-font-smoothing: antialiased;
 }
 .rc *,
@@ -116,6 +118,39 @@
   color: var(--rc-bad);
   text-wrap: balance;
 }
+/* A hero with examples behind it is one big button, with a plain cue under the sentence. */
+.rc-heroBtn {
+  display: block;
+  width: calc(100% + 16px);
+  margin: -6px -8px -8px;
+  padding: 6px 8px 8px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.rc-heroBtn:hover {
+  background: var(--rc-hover);
+}
+.rc-seeMore {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 5px 12px;
+  border: 1px solid var(--rc-rule);
+  border-radius: 999px;
+  background: var(--rc-card);
+  color: var(--rc-ink);
+  font: 650 13px/1.3 var(--rc-sans);
+  letter-spacing: 0;
+}
+.rc-heroBtn:hover .rc-seeMore {
+  border-color: var(--rc-muted);
+}
 
 /* Section titles in small capitals */
 .rc-secTitle {
@@ -150,8 +185,40 @@
   padding: 0;
 }
 .rc-leak {
-  padding: 10px 0;
   border-bottom: 1px solid var(--rc-rule);
+}
+.rc-leakBody {
+  display: block;
+  padding: 10px 0;
+}
+/* A bar with examples behind it is a button: the whole row, a chevron at the end. */
+.rc-leakBtn {
+  position: relative;
+  display: block;
+  width: calc(100% + 16px);
+  margin: 0 -8px;
+  padding: 0 28px 0 8px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.rc-leakBtn:hover {
+  background: var(--rc-hover);
+}
+.rc-leakGo {
+  position: absolute;
+  right: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 22px;
+  line-height: 1;
+  color: var(--rc-muted);
+}
+.rc-leakBtn:hover .rc-leakGo {
+  color: var(--rc-ink);
 }
 .rc-leakHead {
   display: flex;
@@ -174,6 +241,7 @@
 /* The range is a soft band 4 px taller than the bar on each side, behind the bar. */
 .rc-leakTrack {
   position: relative;
+  display: block;
   height: 18px;
   margin-top: 4px;
 }
@@ -203,6 +271,7 @@
   background: var(--rc-bar);
 }
 .rc-leakDetail {
+  display: block;
   margin-top: 4px;
   color: var(--rc-muted);
   font-size: 12.5px;
@@ -322,6 +391,7 @@
   margin-top: 10px;
 }
 .rc-fix {
+  position: relative;
   display: grid;
   grid-template-columns: 92px minmax(0, 1fr);
   gap: 14px;
@@ -366,6 +436,36 @@
   font-size: 12px;
   font-weight: 650;
 }
+/* "See the games": the real button; its ::after stretches over the whole quick fix card. */
+.rc-fixGo {
+  margin-top: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--rc-ink);
+  font-size: 12.5px;
+  font-weight: 650;
+  text-decoration: underline;
+  text-decoration-color: rgba(22, 19, 15, 0.35);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.rc-fixGo::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+}
+.rc-fix:has(.rc-fixGo:hover) {
+  border-color: var(--rc-muted);
+}
+.rc-fixGo:focus-visible {
+  outline: none;
+}
+.rc-fixGo:focus-visible::after {
+  outline: 2px solid var(--rc-bad);
+  outline-offset: 2px;
+}
 
 /* Call to action */
 .rc-cta {
@@ -392,7 +492,14 @@
   cursor: default;
 }
 .rc-cta:focus-visible,
-.rc-ghost:focus-visible {
+.rc-ghost:focus-visible,
+.rc-heroBtn:focus-visible,
+.rc-leakBtn:focus-visible,
+.rc-back:focus-visible,
+.rc-exTry:focus-visible,
+.rc-exLink:focus-visible,
+.rc-more:focus-visible,
+.rc-exTitle:focus-visible {
   outline: 2px solid var(--rc-bad);
   outline-offset: 2px;
 }
@@ -438,8 +545,11 @@
   .rc[data-mode='fullscreen'] .rc-right {
     margin-top: 16px;
   }
-  .rc[data-mode='fullscreen'] .rc-leak {
+  .rc[data-mode='fullscreen'] .rc-leakBody {
     padding: 6px 0 7px;
+  }
+  .rc[data-mode='fullscreen'] .rc-exList {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .rc[data-mode='fullscreen'] .rc-boards {
     max-width: 440px;
@@ -468,7 +578,7 @@
 /* Wide enough: each bar's label, plain line and share on one row, the bar under them.
    Narrow frames keep them stacked. */
 @media (min-width: 520px) {
-  .rc-leak {
+  .rc-leakBody {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-areas: 'label detail pct' 'track track track';
@@ -622,5 +732,248 @@
   }
   .rc-statusFill {
     transition: none;
+  }
+}
+
+/* Examples panel (the drill-down): the games behind a finding, in the same paper look. */
+.rc-exPanel {
+  margin-top: 14px;
+}
+.rc-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 13px 6px 10px;
+  border: 1px solid var(--rc-rule);
+  border-radius: 999px;
+  background: var(--rc-card);
+  color: var(--rc-ink);
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.rc-back:hover {
+  border-color: var(--rc-muted);
+}
+.rc-exTitle {
+  margin: 14px 0 0;
+  font-family: var(--rc-serif);
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.12;
+  letter-spacing: -0.015em;
+  color: var(--rc-ink);
+  text-wrap: balance;
+}
+.rc-exTitle:focus:not(:focus-visible) {
+  outline: none;
+}
+.rc-exCount {
+  margin: 6px 0 0;
+  color: var(--rc-body);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.rc-exNote {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0 0;
+  color: var(--rc-muted);
+  font-size: 13px;
+}
+.rc-exNote--center {
+  justify-content: center;
+  text-align: center;
+}
+.rc-exError p {
+  margin: 10px 0 0;
+}
+.rc-exError > p:first-child {
+  color: var(--rc-bad);
+  font-weight: 650;
+}
+.rc-exError .rc-ghost {
+  margin-top: 10px;
+}
+.rc-exList {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.rc-ex {
+  min-width: 0;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--rc-card);
+  border: 1px solid var(--rc-rule);
+  box-shadow: var(--rc-card-shadow);
+}
+.rc-exTop {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+.rc-exInfo {
+  min-width: 0;
+}
+.rc-exMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  color: var(--rc-muted);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.rc-chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+/* No green here: green means an answer on this card. */
+.rc-chip--loss {
+  color: var(--rc-bad);
+  background: rgba(180, 46, 36, 0.09);
+}
+.rc-chip--win {
+  color: var(--rc-ink);
+  background: rgba(22, 19, 15, 0.08);
+}
+.rc-chip--draw {
+  color: var(--rc-body);
+  background: rgba(22, 19, 15, 0.05);
+}
+.rc-exMove {
+  margin-top: 4px;
+  color: var(--rc-ink);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.rc-spark {
+  display: block;
+  width: 100%;
+  max-width: 320px;
+  height: auto;
+  margin-top: 6px;
+  overflow: visible;
+}
+.rc-sparkMid {
+  stroke: var(--rc-rule);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+.rc-sparkLine {
+  fill: none;
+  stroke: var(--rc-ink);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.rc-sparkDrop {
+  stroke: var(--rc-bad);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+.rc-sparkSlip {
+  fill: var(--rc-bad);
+  stroke: var(--rc-card);
+  stroke-width: 1.5;
+}
+.rc-exSlow {
+  margin: 10px 0 0;
+  color: var(--rc-body);
+  font-size: 13px;
+  font-style: italic;
+}
+.rc-exActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.rc-exTry {
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--rc-ink);
+  color: var(--rc-paper);
+  font-size: 13.5px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.rc-exTry:hover {
+  background: #2a2520;
+}
+.rc-exTry:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+.rc-exLink {
+  padding: 7px 13px;
+  border: 1px solid var(--rc-rule);
+  border-radius: 10px;
+  background: var(--rc-card);
+  color: var(--rc-ink);
+  font-size: 13.5px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.rc-exLink:hover {
+  border-color: var(--rc-muted);
+}
+.rc-exHelp {
+  margin: 6px 0 0;
+  color: var(--rc-muted);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+.rc-exType {
+  color: var(--rc-ink);
+  font-weight: 650;
+  user-select: all;
+}
+.rc-more {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  padding: 11px 16px;
+  border: 1px solid var(--rc-ink);
+  border-radius: 12px;
+  background: var(--rc-card);
+  color: var(--rc-ink);
+  font-size: 14px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.rc-more:hover {
+  background: #fff;
+}
+.rc-more:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+@media (min-width: 560px) {
+  .rc-exTop {
+    grid-template-columns: 120px minmax(0, 1fr);
+    gap: 14px;
+  }
+}
+@media (max-width: 480px) {
+  .rc-ex {
+    padding: 10px;
+  }
+  .rc-exTop {
+    grid-template-columns: 88px minmax(0, 1fr);
+    gap: 10px;
+  }
+  .rc-exTitle {
+    font-size: 24px;
   }
 }
