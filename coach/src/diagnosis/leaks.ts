@@ -1,6 +1,6 @@
 import type { Outcome, TimeClass } from '../../../src/types';
 import type { CachedGame } from '../analysis/cache';
-import { LEAK_CFG } from '../config';
+import { LEAK_CFG, STATS_CFG } from '../config';
 import { gamePlies, nonPawnMaterial, type PlyFact } from './areas';
 import { mulberry32 } from './stats';
 
@@ -85,7 +85,27 @@ export interface LeakReport {
   leaks: Leak[];
   conversion: Conversion;
   timeLosses: TimeLosses;
+  /** False below STATS_CFG.minGames games: the ranges are too rough to show. */
+  rangesReliable: boolean;
+  /**
+   * Null unless there are at least LEAK_CFG.focusMinWinningGames clearly-winning games and
+   * STATS_CFG.minGames games (a note says so), or when no winning game was lost. The rating
+   * slope uses at most WHATIF_MAX_EXTRA_SCORE extra score per game.
+   */
   whatIf: WhatIf | null;
+  /**
+   * What to work on, by a rule fixed in advance (chooseLeakFocus):
+   * - `{ kind: 'keepTheWin' }`: at least LEAK_CFG.focusMinWinningGames clearly-winning games, and
+   *   lost-from-winning is at least focusKeepTheWinLostSharePct of all losses.
+   * - `{ kind: 'clock' }`: otherwise, at least focusClockMinLosses losses with at least
+   *   focusClockSharePct of them on time; also whenever "Low on the clock" is the situation the
+   *   next rule would pick. `{ kind: 'leak', key: 'clock' }` is never produced.
+   * - `{ kind: 'leak', key }`: otherwise the situation with the largest share, never "already
+   *   losing", and never "already winning" when keep-the-win failed only for lack of winning games
+   *   (its loss share was high enough); then the next largest is taken.
+   * - Placeholder: when nothing was given away at all (e.g. no games), `{ kind: 'leak', key:
+   *   'middlegame' }`. Check `games` before using the focus.
+   */
   focus: LeakFocus;
   notes: string[];
 }
@@ -122,20 +142,27 @@ export function eloForScoreGain(dScorePerGame: number, currentScore: number): nu
   return ((400 / Math.LN10) * dScorePerGame) / (p * (1 - p));
 }
 
-/** Focus rule, fixed in advance: keep the win → the clock → the biggest situation other than "already losing". */
+/** Focus rule, fixed in advance; the shapes and the order are documented on LeakReport.focus. */
 export function chooseLeakFocus(conversion: Conversion, timeLosses: TimeLosses, leaks: Leak[]): LeakFocus {
-  if (
-    conversion.winningGames >= LEAK_CFG.focusMinWinningGames &&
-    conversion.lostShareOfLossesPct >= LEAK_CFG.focusKeepTheWinLostSharePct
-  ) {
-    return { kind: 'keepTheWin' };
-  }
+  const enoughWinning = conversion.winningGames >= LEAK_CFG.focusMinWinningGames;
+  const lostShareHigh = conversion.lostShareOfLossesPct >= LEAK_CFG.focusKeepTheWinLostSharePct;
+  if (enoughWinning && lostShareHigh) return { kind: 'keepTheWin' };
   if (timeLosses.losses >= LEAK_CFG.focusClockMinLosses && timeLosses.sharePct >= LEAK_CFG.focusClockSharePct) {
     return { kind: 'clock' };
   }
-  const top = rankLeaks(leaks.filter((l) => l.key !== 'losing'))[0];
-  return { kind: 'leak', key: top?.key ?? 'middlegame' };
+  if (leaks.every((l) => l.sharePct <= 0)) return { kind: 'leak', key: 'middlegame' }; // placeholder: nothing given away
+  // Keep-the-win failed only on sample size: don't bring it back in through "already winning".
+  const skipWinning = !enoughWinning && lostShareHigh;
+  const top = rankLeaks(leaks.filter((l) => l.key !== 'losing' && !(skipWinning && l.key === 'winning')))[0];
+  if (!top) return { kind: 'leak', key: 'middlegame' };
+  return top.key === 'clock' ? { kind: 'clock' } : { kind: 'leak', key: top.key };
 }
+
+/**
+ * The what-if's extra score per game is capped at this in the rating slope: the logistic slope
+ * is a straight-line approximation, only valid for small changes in score.
+ */
+export const WHATIF_MAX_EXTRA_SCORE = 0.1;
 
 function rankLeaks(leaks: Leak[]): Leak[] {
   return [...leaks].sort((a, b) => b.sharePct - a.sharePct || LEAK_KEYS.indexOf(a.key) - LEAK_KEYS.indexOf(b.key));
@@ -339,16 +366,21 @@ export function leakReport(games: CachedGame[], usernames: string[]): LeakReport
   };
   const timeLosses: TimeLosses = { losses, onTime, sharePct: losses > 0 ? (100 * onTime) / losses : 0 };
   const avgScore = per(score);
-  // Half of the lost-from-winning games turned into wins: each one is +1 point.
+  // Half of the lost-from-winning games turned into wins: each one is +1 point. Only with enough
+  // games overall and enough clearly-winning games; the slope uses at most WHATIF_MAX_EXTRA_SCORE.
   const extraScorePerGame = per(lost / 2);
+  const enoughForEstimate = winningGames >= LEAK_CFG.focusMinWinningGames && n >= STATS_CFG.minGames;
+  const capped = extraScorePerGame > WHATIF_MAX_EXTRA_SCORE;
   const whatIf: WhatIf | null =
-    lost > 0
+    enoughForEstimate && lost > 0
       ? {
-          label: 'If you lost half as many games you were winning',
+          label: 'Rough estimate: if you lost half as many of the games you were winning',
           extraScorePerGame,
-          ratingPoints: Math.round(eloForScoreGain(extraScorePerGame, avgScore) / 5) * 5,
+          ratingPoints:
+            Math.round(eloForScoreGain(Math.min(extraScorePerGame, WHATIF_MAX_EXTRA_SCORE), avgScore) / 5) * 5,
         }
       : null;
+  const rangesReliable = n >= STATS_CFG.minGames;
   const focus = chooseLeakFocus(conversion, timeLosses, leaks);
 
   const notes: string[] = [];
@@ -387,11 +419,17 @@ export function leakReport(games: CachedGame[], usernames: string[]): LeakReport
         `of those games; you won ${Math.round(conversion.convertedPct)}% of yours.`,
     );
   }
+  if (n > 0 && !rangesReliable) {
+    notes.push(`With fewer than ${STATS_CFG.minGames} games, the ranges are too rough to show.`);
+  }
   if (whatIf) {
     notes.push(
       'The rating figure is a rough estimate from results alone: it assumes half of the winning ' +
-        'games you lost had been won, and uses the usual rating formula at your current score.',
+        'games you lost had been won, and uses the usual rating formula at your current score.' +
+        (capped ? ' It is held down because that formula only works for small changes.' : ''),
     );
+  } else if (n > 0 && lost > 0) {
+    notes.push('Not enough games for an estimate yet.');
   }
 
   return {
@@ -403,6 +441,7 @@ export function leakReport(games: CachedGame[], usernames: string[]): LeakReport
     leaks,
     conversion,
     timeLosses,
+    rangesReliable,
     whatIf,
     focus,
     notes,
