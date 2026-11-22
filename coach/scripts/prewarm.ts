@@ -81,7 +81,9 @@ async function main(): Promise<void> {
     `Finished in ${(secs / 60).toFixed(1)} min, ${positions} positions` +
       (positions > 0 ? `, ${(positions / secs).toFixed(1)} positions/s (${((secs * 1000) / positions).toFixed(0)} ms each).` : '.'),
   );
-  if (state.skipped) console.log(`${state.skipped} game(s) skipped (unreadable PGN).`);
+  if (state.skipped) {
+    console.log(`${state.skipped} game(s) could not be analysed: ${state.skipReason} (retried on the next run).`);
+  }
   if (state.state === 'error') fail(`Analysis stopped: ${state.error}`);
 }
 

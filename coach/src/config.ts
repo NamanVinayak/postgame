@@ -3,7 +3,9 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 // Engine settings for bulk analysis of many games (fast, shallow).
-export const ENGINE_CFG = { movetimeMs: 60, threads: 2, hashMb: 64, multiPv: 2 };
+// 30 ms ≈ depth 11–12 on an M4 Pro with MultiPV 2; enough to compare error rates fairly,
+// since both sides are graded the same way; displayed positions use DISPLAY_CFG.
+export const ENGINE_CFG = { movetimeMs: 30, threads: 2, hashMb: 64, multiPv: 2 };
 // How many recent games to pull, and how close in rating an opponent must be to count.
 export const SOURCE_CFG = { defaultMaxGames: 300, ratingWindow: 200 };
 // Definitions of the six game areas a move can be filed under.
