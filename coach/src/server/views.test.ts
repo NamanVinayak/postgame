@@ -373,7 +373,7 @@ describe('report card v4', () => {
     expect(clock.focus.title).toBe('Beat the clock');
     expect(clock.focus.estimate).toBeUndefined();
     const mid = v4(toReportView(spikeReport({ focus: { kind: 'leak', key: 'middlegame' } })));
-    expect(mid.hero).toEqual({ headline: 'Your biggest leak: balanced middlegames.', sub: '35% of the win chance you give away happens here.', source: 'middlegame' });
+    expect(mid.hero).toEqual({ headline: 'Your biggest leak: balanced middlegames.', sub: '35% of the winning chances you give away happen here.', source: 'middlegame' });
     expect(mid.focus.estimate).toBeUndefined();
     for (const v of [clock, mid]) expect(parseCoachView(JSON.parse(JSON.stringify(v)))).toEqual(v);
     // Plain words only.
@@ -462,10 +462,10 @@ describe('report card v4, review fixes', () => {
   it('heroNamesFocusLeakWithoutMajorityClaim', () => {
     // The top bar is 35%: a leak, not a majority, so no "one place" or "most".
     const top = v4(toReportView(spikeReport({ focus: { kind: 'leak', key: 'middlegame' } })));
-    expect(top.hero).toEqual({ headline: 'Your biggest leak: balanced middlegames.', sub: '35% of the win chance you give away happens here.', source: 'middlegame' });
+    expect(top.hero).toEqual({ headline: 'Your biggest leak: balanced middlegames.', sub: '35% of the winning chances you give away happen here.', source: 'middlegame' });
     // The focus is the second-ranked bar: it is this week's focus, not the biggest leak.
     const second = v4(toReportView(spikeReport({ focus: { kind: 'leak', key: 'winning' } })));
-    expect(second.hero).toEqual({ headline: "Your focus this week: when you're already winning.", sub: '24% of the win chance you give away happens here.', source: 'winning' });
+    expect(second.hero).toEqual({ headline: "Your focus this week: when you're already winning.", sub: '24% of the winning chances you give away happen here.', source: 'winning' });
     for (const h of [top.hero, second.hero]) expect(`${h.headline} ${h.sub}`).not.toMatch(/one place|most|majority|biggest leak: when/i);
   });
 
