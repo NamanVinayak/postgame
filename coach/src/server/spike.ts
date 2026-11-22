@@ -13,7 +13,7 @@ import { Chess } from 'chess.js';
 import { z } from 'zod';
 import type { PositionFacts } from '../coaching/positionFacts';
 import { BOARD_URI, registerBoardResource } from './boardResource';
-import { toAnswerView, toQuestionView, toReportView, type Attempt, type CoachView, type DiagnosisLike } from './views';
+import { toAnswerView, toQuestionView, toReportView, type Attempt, type CoachView, type LeakReportLike } from './views';
 
 // The three position values below are fixed by the plan. Everything else is spike filler:
 // the win % numbers, the refutation and the report rows are placeholders, not engine output.
@@ -79,21 +79,24 @@ function spikeAnswer(f: PositionFacts, attempt?: Attempt): CoachView {
   return view.kind === 'answer' ? { ...view, caption: `${view.caption} ${SPIKE_NOTE}` } : view;
 }
 
-// Six made-up rows covering all four labels, shaped like B4's Diagnosis.
-const SPIKE_DIAGNOSIS: DiagnosisLike = {
+// Made-up "where your points go" numbers, shaped like P1's LeakReport (not anyone's games).
+const SPIKE_REPORT: LeakReportLike = {
   timeClass: 'blitz',
   games: 300,
-  areas: [
-    { area: 'opening', label: 'notYourProblem', myRate: 2.1, oppRate: 2.4, gapPts: -0.3, ci95: [-1.2, 0.6], games: 300 },
-    { area: 'middlegame', label: 'noClearDifference', myRate: 6.8, oppRate: 5.9, gapPts: 0.9, ci95: [-0.4, 2.3], games: 296 },
-    { area: 'endgame', label: 'gap', myRate: 9.4, oppRate: 5.6, gapPts: 3.8, ci95: [2.2, 5.5], ciAdj: [1.3, 6.4], games: 141 },
-    { area: 'converting', label: 'notYourProblem', myRate: 3.2, oppRate: 3.9, gapPts: -0.7, ci95: [-2.0, 0.6], games: 118 },
-    { area: 'defending', label: 'noClearDifference', myRate: 11.5, oppRate: 10.2, gapPts: 1.3, ci95: [-1.1, 3.8], games: 97 },
-    { area: 'timePressure', label: 'notEnoughData', myRate: 15, oppRate: 12, gapPts: 3, ci95: [-6, 12], games: 19 },
+  leaks: [
+    { key: 'middlegame', label: 'Balanced middlegames', sharePct: 35, shareRange: [32, 38], bigMistakesPerGame: 1.8 },
+    { key: 'winning', label: "When you're already winning", sharePct: 24, shareRange: [21, 27], bigMistakesPerGame: 1 },
+    { key: 'opening', label: 'Your first 10 moves', sharePct: 21, shareRange: [18, 24], bigMistakesPerGame: 0.8 },
+    { key: 'clock', label: 'Low on the clock', sharePct: 10, shareRange: [7, 13], bigMistakesPerGame: 0.4 },
+    { key: 'losing', label: "When you're already losing", sharePct: 7, shareRange: [5, 9], bigMistakesPerGame: 0.3 },
+    { key: 'endgame', label: 'Endgames', sharePct: 3, shareRange: [2, 5], bigMistakesPerGame: 0.2 },
   ],
-  focus: { kind: 'area', area: 'endgame' },
+  conversion: { winningGames: 160, lost: 48, convertedPct: 68, lostShareOfLossesPct: 32, oppConvertedPct: 69 },
+  timeLosses: { losses: 150, onTime: 24, sharePct: 16 },
+  whatIf: { ratingPoints: 55 },
+  focus: { kind: 'keepTheWin' },
+  rangesReliable: true,
 };
-const SPIKE_HEADLINE = 'Spike sample, not your games: endgames are where points slip away.';
 
 function buildServer(): McpServer {
   const server = new McpServer({ name: 'postgame-coach-spike', version: '0.2.0' });
@@ -142,12 +145,12 @@ function buildServer(): McpServer {
     {
       title: 'Ping the board (report card)',
       description:
-        'Test tool for the Postgame Coach board widget. Shows a report card filled with made-up sample rows (not the user\'s games). Use it when the user says "ping the report".',
+        'Test tool for the Postgame Coach board widget. Shows a report card filled with made-up sample numbers (not the user\'s games). Use it when the user says "ping the report".',
       _meta: { ui: { resourceUri: BOARD_URI } },
     },
     async () => {
-      const view = toReportView(SPIKE_DIAGNOSIS, SPIKE_HEADLINE);
-      const text = 'Report card test with made-up sample rows (not real games): endgames marked as the weak spot, focus endgames.';
+      const view = toReportView(SPIKE_REPORT);
+      const text = 'Report card test with made-up sample numbers (not real games): focus "Keep the win".';
       return { content: [{ type: 'text', text }], structuredContent: { ...view } };
     },
   );

@@ -8,7 +8,7 @@ import type { Diagnosis } from '../diagnosis/diagnose';
 import { positionKey, type RepeatedPosition } from '../diagnosis/repeated';
 import { fixtureGame } from '../diagnosis/testGames';
 import { createDisplayEngine } from '../engine/displayEngine';
-import { toReportView } from '../server/views';
+import { quickFixFromPosition } from '../server/views';
 import { buildReportPositions, commonOpening, openingName } from './reportPositions';
 import { emptyStudent, recordAttempt, startSession } from './student';
 
@@ -173,9 +173,8 @@ describe('buildReportPositions', () => {
     );
     expect(JSON.stringify(out)).not.toContain('Bb5');
     expect(DEEP_LOSS).not.toBe(16); // not the quick check's average
-    // The report view takes the positions as they are (its checks would drop a bad one).
-    const view = toReportView(d, 'h', { positions: out }) as { positions?: unknown[] };
-    expect(view.positions).toHaveLength(1);
+    // The report card shows it as a quick fix, its answer hidden until the board is tried.
+    expect(quickFixFromPosition(out[0], false)).toMatchObject({ revealed: false, bestSan: null, bestUci: null, wrongSan: ['Bc4', 'Na3'] });
     for (const c of calls) expect(c.ms).toBe(DISPLAY_CFG.movetimeMs);
     // The focus position is checked first; Q needs no search after its only move (it is the best).
     expect(calls[0].fen).toBe(P);
