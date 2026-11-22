@@ -4,32 +4,62 @@ import { createRoot } from 'react-dom/client';
 import { parseCoachView, type CoachView } from '../../src/server/views';
 import { AnswerBoard } from './AnswerBoard';
 import { QuestionBoard } from './QuestionBoard';
-import { ReportCard } from './ReportCard';
+import { ReportCard, type Display } from './ReportCard';
 import { errorText, resultText } from './shared';
 import './widget.css';
 
 type Status = { kind: 'waiting' } | { kind: 'error'; message: string } | { kind: 'ready'; view: CoachView };
 
-function Widget({ app, status }: { app: App; status: Status }) {
+interface WidgetProps {
+  app: App;
+  status: Status;
+  display: Display;
+  onDisplayMode: (mode: NonNullable<Display['mode']>) => void;
+}
+
+function Widget({ app, status, display, onDisplayMode }: WidgetProps) {
+  const report = status.kind === 'ready' && status.view.kind === 'report';
   return (
-    <div className="pg-wrap">
+    <div className={report ? 'pg-wrap pg-wrap--report' : 'pg-wrap'}>
       {status.kind === 'waiting' && <p className="pg-p pg-muted">Waiting for the coach…</p>}
       {status.kind === 'error' && <p className="pg-p pg-error">Board error: {status.message}</p>}
       {status.kind === 'ready' && status.view.kind === 'answer' && <AnswerBoard view={status.view} />}
       {status.kind === 'ready' && status.view.kind === 'question' && <QuestionBoard app={app} view={status.view} />}
-      {status.kind === 'ready' && status.view.kind === 'report' && <ReportCard view={status.view} />}
+      {status.kind === 'ready' && status.view.kind === 'report' && (
+        <ReportCard app={app} view={status.view} display={display} onDisplayMode={onDisplayMode} />
+      )}
     </div>
   );
 }
 
-const app = new App({ name: 'Postgame Coach board', version: '0.2.0' });
+// The report card can go fullscreen; the host decides whether to offer it.
+const app = new App({ name: 'Postgame Coach board', version: '0.3.0' }, { availableDisplayModes: ['inline', 'fullscreen'] });
 const root = createRoot(document.getElementById('root')!);
+
+let status: Status = { kind: 'waiting' };
+let display: Display = { mode: undefined, available: [] };
+// A new key per tool result, so a new position starts from a fresh board state. Host-context
+// changes (theme, display mode) re-render with the same key, so nothing on screen resets.
 let shown = 0;
-// A new key per tool result, so a new position starts from a fresh board state.
-const show = (status: Status) => root.render(<Widget key={++shown} app={app} status={status} />);
+const render = () =>
+  root.render(<Widget key={shown} app={app} status={status} display={display} onDisplayMode={setDisplayMode} />);
+const show = (next: Status) => {
+  status = next;
+  shown++;
+  render();
+};
+
+function setDisplayMode(mode: NonNullable<Display['mode']>) {
+  if (display.mode === mode) return;
+  display = { ...display, mode };
+  render();
+}
 
 function applyHostContext(ctx: Partial<McpUiHostContext> | undefined) {
   if (ctx?.theme) applyDocumentTheme(ctx.theme);
+  const all = { ...app.getHostContext(), ...ctx };
+  display = { mode: all.displayMode ?? display.mode, available: all.availableDisplayModes ?? display.available };
+  render();
 }
 
 // Render something visible first so the frame never has zero height.
