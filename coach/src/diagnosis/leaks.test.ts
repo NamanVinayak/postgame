@@ -5,15 +5,19 @@ import { LEAK_CFG, STATS_CFG } from '../config';
 import {
   LEAK_KEYS,
   chooseLeakFocus,
+  costlyMoves,
   eloForScoreGain,
   keepTheWinCandidates,
   leakCategory,
   leakReport,
+  plyLeakCategory,
+  sustainedWinningPly,
   type Conversion,
   type Leak,
   type LeakKey,
   type TimeLosses,
 } from './leaks';
+import { gamePlies } from './areas';
 import { fixtureGame, randomSans, shuffleSans, testRng, type FixtureOpts } from './testGames';
 
 const START = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
@@ -307,5 +311,39 @@ describe('keepTheWinCandidates', () => {
     const k = keepTheWinCandidates(games, ['alice']);
     expect(k.map((x) => x.gameId)).toEqual(['lostNew', 'lostOld', 'drawn', 'won']);
     expect(k[0]).toEqual({ gameId: 'lostNew', ply: 2, outcome: 'loss', endTime: 200, quickLossPts: 15 });
+  });
+});
+
+describe('shared rules for lessons and examples', () => {
+  it('sustainedWinningPlyIsTheSecondOwnMoveInARow', () => {
+    // alice (White) at 80 before her 2nd and 3rd moves (plies 2 and 4): the state is reached at ply 4.
+    const twice = game({ id: 'twice', sans: SANS, wins: winsFrom({ 1: 80 }) });
+    expect(sustainedWinningPly(gamePlies(twice)!, true)).toBe(4);
+    // never two in a row
+    const gaps = game({ id: 'gaps', sans: SANS, wins: winsFrom({ 1: 80, 3: 60, 5: 80, 7: 60 }) });
+    expect(sustainedWinningPly(gamePlies(gaps)!, true)).toBeNull();
+    // bob (Black) clearly winning from ply 0: his moves at plies 1 and 3
+    const theirs = game({ id: 'theirs', sans: SANS, wins: winsFrom({ 0: 20 }) });
+    expect(sustainedWinningPly(gamePlies(theirs)!, false)).toBe(3);
+    expect(sustainedWinningPly(gamePlies(theirs)!, true)).toBeNull();
+  });
+
+  it('plyLeakCategoryReadsTheGamesOwnClock', () => {
+    // alice's clock after ply 4 is 10 s, so her move at ply 6 is low on the clock; ply 8 is not (170 s after ply 6).
+    const clocks = SANS.map((_, i) => (i === 4 ? 10 : 170));
+    const c = game({ id: 'clock', sans: SANS, clocks });
+    const plies = gamePlies(c)!;
+    expect(plyLeakCategory(c, plies[6])).toBe('clock');
+    expect(plyLeakCategory(c, plies[8])).toBe('opening');
+    expect(plyLeakCategory(c, plies[30])).toBe('middlegame');
+  });
+
+  it('costlyMovesAreTheirCategorysDropsOf10OrMore', () => {
+    // alice drops 12 at ply 24 (middlegame), 9 at ply 28 (not costly), and bob drops 30 at ply 25 (not hers).
+    const c = game({ id: 'mid', sans: SANS, wins: winsFrom({ 24: 38, 25: 68, 28: 59 }) });
+    const mid = costlyMoves([c], ['alice'], 'middlegame');
+    expect(mid.map((m) => [m.c.game.id, m.ply, m.lossPts])).toEqual([['mid', 24, 12]]);
+    expect(costlyMoves([c], ['alice'], 'opening')).toEqual([]);
+    expect(costlyMoves([c], ['bob'], 'middlegame')).toEqual([]);
   });
 });

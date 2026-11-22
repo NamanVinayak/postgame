@@ -1,3 +1,4 @@
+import { DELTA } from '../../../src/constants';
 import type { Outcome, TimeClass } from '../../../src/types';
 import type { CachedGame } from '../analysis/cache';
 import { LEAK_CFG, STATS_CFG } from '../config';
@@ -191,6 +192,53 @@ function clockBefore(c: CachedGame, ply: number): number | null {
   return ply < 2 ? baseSec : (clocks[ply - 2] ?? null);
 }
 
+/**
+ * The ply of the move at which one side becomes "clearly winning": its win % before the move is
+ * at least LEAK_CFG.winningWinPct on LEAK_CFG.winningConsecutive of its own moves in a row; this
+ * ply is the last of that run. `mine` picks the player's moves (else the opponent's). Null when it
+ * never happens. The one rule behind Conversion, keep-the-win and the thrown-wins examples.
+ */
+export function sustainedWinningPly(plies: PlyFact[], mine: boolean): number | null {
+  let run = 0;
+  for (const p of plies) {
+    if (p.mine !== mine) continue;
+    run = p.winBeforeMover >= LEAK_CFG.winningWinPct ? run + 1 : 0;
+    if (run >= LEAK_CFG.winningConsecutive) return p.ply;
+  }
+  return null;
+}
+
+/** The situation of one move of a cached game (see LeakKey), with the mover's own clock before it. */
+export function plyLeakCategory(c: CachedGame, p: PlyFact): LeakKey {
+  return leakCategory(p.fenBefore, p.ply, p.winBeforeMover, clockBefore(c, p.ply), c.game.baseSec);
+}
+
+/** A costly move drops the mover's win % by at least this much (the app's mistake line). */
+export const COSTLY_DROP_PTS = DELTA.mistake;
+
+/** One of the player's costly moves (a drop of at least COSTLY_DROP_PTS win-% points, quick check). */
+export interface CostlyMove {
+  c: CachedGame;
+  ply: number;
+  lossPts: number;
+}
+
+/**
+ * The player's costly moves in one situation, from the named accounts' replayable games: each
+ * move whose win-% drop (quick check) is at least COSTLY_DROP_PTS. In game order, then by ply.
+ */
+export function costlyMoves(games: CachedGame[], usernames: string[], key: LeakKey): CostlyMove[] {
+  const out: CostlyMove[] = [];
+  for (const c of ownGames(games, usernames)) {
+    const plies = gamePlies(c);
+    if (!plies) continue;
+    for (const p of plies) {
+      if (p.mine && p.lossPts >= COSTLY_DROP_PTS && plyLeakCategory(c, p) === key) out.push({ c, ply: p.ply, lossPts: p.lossPts });
+    }
+  }
+  return out;
+}
+
 function summarise(c: CachedGame): GameLeaks | null {
   if (memo.has(c)) return memo.get(c)!;
   const plies = gamePlies(c);
@@ -199,27 +247,21 @@ function summarise(c: CachedGame): GameLeaks | null {
     const zero = () => LEAK_KEYS.map(() => 0);
     const g: GameLeaks = {
       myLoss: zero(), oppLoss: zero(), myBig: zero(), myMoves: zero(),
-      iWasWinning: false, theyWereWinning: false,
+      iWasWinning: sustainedWinningPly(plies, true) !== null,
+      theyWereWinning: sustainedWinningPly(plies, false) !== null,
       outcome: c.game.outcome,
       onTime: c.game.outcome === 'loss' && /\[Termination "[^"]*on time[^"]*"\]/i.test(c.game.pgn),
       endTime: c.game.endTime,
       noClock: c.game.baseSec <= 0 || c.game.clocks.every((s) => s === null),
     };
-    let myRun = 0;
-    let oppRun = 0;
     for (const p of plies) {
-      const k = LEAK_KEYS.indexOf(leakCategory(p.fenBefore, p.ply, p.winBeforeMover, clockBefore(c, p.ply), c.game.baseSec));
-      const winningNow = p.winBeforeMover >= LEAK_CFG.winningWinPct;
+      const k = LEAK_KEYS.indexOf(plyLeakCategory(c, p));
       if (p.mine) {
         g.myLoss[k] += p.lossPts / 100;
         g.myMoves[k]++;
         if (p.mistake) g.myBig[k]++;
-        myRun = winningNow ? myRun + 1 : 0;
-        if (myRun >= LEAK_CFG.winningConsecutive) g.iWasWinning = true;
       } else {
         g.oppLoss[k] += p.lossPts / 100;
-        oppRun = winningNow ? oppRun + 1 : 0;
-        if (oppRun >= LEAK_CFG.winningConsecutive) g.theyWereWinning = true;
       }
     }
     out = g;
