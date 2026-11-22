@@ -21,9 +21,9 @@ in Claude Code with one line.
 
 ## Where this comes from
 
-I already coach myself this way, by hand, with Claude Code. I had Claude pull every game
-from my Chess.com accounts (about 7,600 games), run each one through Stockfish, and look
-for patterns. Generic game review never showed me the result: **my opening knowledge runs
+I already coach myself this way, with an AI agent workflow I put together. It pulled every
+game from my Chess.com accounts (about 7,600 games), ran each one through Stockfish, and
+looked for patterns. Generic game review never showed me the result: **my opening knowledge runs
 out after about three moves.** My rate of serious errors climbs from 0.4% on move 3 to
 7.5% by move 8 and 19% by move 19, and the curve is the same in blitz and rapid. So the
 problem is missing knowledge, not playing too fast. The usual suspects (bad openings,
@@ -40,8 +40,8 @@ any player can.
 - **Train (shipped Nov 21, 2026):** a *coach pack* is a JSON file of positions from your
   own games where you keep picking the wrong move. Postgame drills them on a spaced
   schedule (1, 3, 7, 16, 35 days). The format is in `src/training/pack.ts`. Today the
-  pack is built by hand from my Claude Code analysis; automating that step is the core of
-  this roadmap.
+  pack comes out of that analysis with manual steps; automating it is the core of this
+  roadmap.
 - **170 passing unit tests** (Vitest + Testing Library) covering analysis, accuracy,
   classification, the training scheduler and the pack parser.
 
@@ -115,5 +115,5 @@ data on our side.
 - [ ] **M4:** progress view and drill retirement in Postgame
 - [ ] **M5:** one-line install, demo, docs
 
-Built the same way as the rest of Postgame: I design, direct and test it, with Claude Code
-as the coding agent.
+Built the same way as the rest of Postgame: spec and plan first, implementation by AI
+coding agents against that plan, and every change reviewed and tested before it ships.

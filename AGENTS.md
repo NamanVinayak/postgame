@@ -61,4 +61,5 @@ then deploys to GitHub Pages under `/postgame/`.
 
 Spec first, then a written plan, then the build with tests, in small commits with
 `feat:` / `fix:` / `docs:` prefixes. Every change to analysis or training logic comes with
-unit tests. The owner designs, directs and tests; Claude Code is the coding agent.
+unit tests. The owner owns the architecture, specs and review; coding agents implement
+against the plan, and every push to `main` runs the tests in CI.
