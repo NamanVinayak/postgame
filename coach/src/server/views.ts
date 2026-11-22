@@ -24,10 +24,59 @@ export interface ReportRow {
   games: number;
 }
 
+/**
+ * One position the player keeps getting wrong, shown on the report card as a "mission": a
+ * small board with their usual wrong move (red) and the best move (green).
+ */
+export interface ReportPosition {
+  /** The position before the move, as a full FEN. */
+  fen: string;
+  /** The player's colour (the side to move here). */
+  orientation: Color;
+  /** The player's usual wrong moves here, most played first (1–4). */
+  wrongSan: string[];
+  /** The red arrow: the first of `wrongSan` as UCI, or null to draw no red arrow. */
+  wrongUci: string | null;
+  bestSan: string;
+  bestUci: string;
+  /** Average win-chance points lost each time the player went wrong here (0–100). */
+  lossPts: number;
+  /** In how many of the games that reached this position the player went wrong. */
+  wrongTimes: number;
+  /** How many of the player's games reached this position. */
+  seenTimes: number;
+  /** Opening name, e.g. "Caro-Kann Defense: Exchange Variation"; null if unknown. */
+  opening: string | null;
+  drillsDone: number;
+  drillsTotal: number;
+}
+
+export interface ReportView {
+  kind: 'report';
+  headline: string;
+  /** One plain sentence under the headline. */
+  subhead?: string;
+  games: number;
+  timeClass: string;
+  rows: ReportRow[];
+  focus: string | null;
+  /** This week's focus positions (at most MAX_REPORT_POSITIONS). */
+  positions?: ReportPosition[];
+  /** The training button's label; the widget defaults to DEFAULT_REPORT_CTA. */
+  cta?: string;
+}
+
 export type CoachView =
   | ({ kind: 'answer' } & BoardView)
   | { kind: 'question'; fen: string; orientation: Color; gameId: string; ply: number; prompt: string }
-  | { kind: 'report'; headline: string; games: number; timeClass: string; rows: ReportRow[]; focus: string | null };
+  | ReportView;
+
+/** What `toReportView` adds to the diagnosis: the words under the headline, the missions, the button. */
+export interface ReportExtras {
+  subhead?: string;
+  positions?: ReportPosition[];
+  cta?: string;
+}
 
 /**
  * The fields of B4's `Diagnosis` that the report card reads. Declared here structurally so
@@ -51,6 +100,13 @@ export interface DiagnosisLike {
 
 /** The report card never shows more rows than this (spec §6b: keep it simple). */
 export const MAX_REPORT_ROWS = 6;
+/** At most this many focus positions ("missions") a week. */
+export const MAX_REPORT_POSITIONS = 3;
+/** At most this many usual wrong moves per position. */
+export const MAX_WRONG_MOVES = 4;
+/** The longest training-button label the widget accepts. */
+export const MAX_CTA_LENGTH = 60;
+export const DEFAULT_REPORT_CTA = "Start this week's training";
 
 const round1 = (x: number) => Math.round(x * 10) / 10;
 
@@ -152,8 +208,12 @@ const LABEL_ORDER: Record<ReportLabel, number> = { gap: 0, notYourProblem: 1, no
  * The likely range is the gap's range moved onto the player's own rate (them + range), so
  * a gap row's band sits wholly above the "them" mark. Rows with too few games show no
  * numbers at all.
+ *
+ * `extras` adds the sentence under the headline, up to three focus positions and the button
+ * label. A position that `parseCoachView` would refuse is dropped here (the others stay), so
+ * the widget never gets a report it can't show; the win-chance loss is rounded to 0.1.
  */
-export function toReportView(d: DiagnosisLike, headline: string): CoachView {
+export function toReportView(d: DiagnosisLike, headline: string, extras: ReportExtras = {}): CoachView {
   const lowEnd = (a: DiagnosisLike['areas'][number]) => (a.ciAdj ?? a.ci95)[0];
   const sorted = d.areas
     .map((a, i) => ({ a, i }))
@@ -189,7 +249,16 @@ export function toReportView(d: DiagnosisLike, headline: string): CoachView {
     focus = n === 1 ? 'the position you keep getting wrong' : `the ${n} positions you keep getting wrong`;
   }
 
-  return { kind: 'report', headline, games: d.games, timeClass: d.timeClass, rows, focus };
+  const view: ReportView = { kind: 'report', headline, games: d.games, timeClass: d.timeClass, rows, focus };
+  if (extras.subhead !== undefined) view.subhead = extras.subhead;
+  if (extras.positions !== undefined) {
+    view.positions = extras.positions
+      .filter(isPosition)
+      .slice(0, MAX_REPORT_POSITIONS)
+      .map((p) => ({ ...p, wrongSan: [...p.wrongSan], lossPts: round1(p.lossPts) }));
+  }
+  if (extras.cta !== undefined) view.cta = extras.cta;
+  return view;
 }
 
 // ---- Checking what a tool sent (used by the widget) ----
@@ -234,6 +303,55 @@ function isRow(r: unknown): boolean {
   );
 }
 
+const isCount = (x: unknown): x is number => isNum(x) && Number.isInteger(x) && x >= 0;
+
+/** A UCI move such as "g8f6" or "e7e8q" (the same shape the board's arrows accept). */
+const UCI = /^[a-h][1-8][a-h][1-8][qrbn]?$/;
+/** A SAN move such as "Nf6", "exd5", "e8=Q+" or "O-O-O". */
+const SAN = /^(?:[KQRBN][a-h]?[1-8]?x?[a-h][1-8]|[a-h](?:x[a-h])?[1-8](?:=[QRBN])?|O-O(?:-O)?)[+#]?$/;
+/** Board, side to move, castling ("-" or a non-empty KQkq), en passant, optional move counters. */
+const FEN_FIELDS = /^([pnbrqkPNBRQK1-8/]+) [wb] (?:-|(?=[KQkq])K?Q?k?q?) (?:-|[a-h][36])(?: \d{1,4} \d{1,4})?$/;
+
+/** A FEN that looks legal: 8 ranks of 8 squares, a side to move, castling and en-passant fields. */
+function isFen(x: unknown): x is string {
+  if (!isStr(x) || x.length > 100) return false;
+  const m = FEN_FIELDS.exec(x);
+  if (!m) return false;
+  const ranks = m[1].split('/');
+  return (
+    ranks.length === 8 &&
+    ranks.every((r) => [...r].reduce((n, c) => n + (c >= '1' && c <= '8' ? Number(c) : 1), 0) === 8)
+  );
+}
+
+function isPosition(p: unknown): p is ReportPosition {
+  return (
+    isObj(p) &&
+    isFen(p.fen) &&
+    isColor(p.orientation) &&
+    Array.isArray(p.wrongSan) &&
+    p.wrongSan.length >= 1 &&
+    p.wrongSan.length <= MAX_WRONG_MOVES &&
+    p.wrongSan.every((s) => isStr(s) && SAN.test(s)) &&
+    (p.wrongUci === null || (isStr(p.wrongUci) && UCI.test(p.wrongUci))) &&
+    isStr(p.bestSan) &&
+    SAN.test(p.bestSan) &&
+    isStr(p.bestUci) &&
+    UCI.test(p.bestUci) &&
+    isNum(p.lossPts) &&
+    p.lossPts >= 0 &&
+    p.lossPts <= 100 &&
+    isCount(p.wrongTimes) &&
+    isCount(p.seenTimes) &&
+    p.seenTimes >= 1 &&
+    p.wrongTimes <= p.seenTimes &&
+    isStrOrNull(p.opening) &&
+    isCount(p.drillsDone) &&
+    isCount(p.drillsTotal) &&
+    p.drillsDone <= p.drillsTotal
+  );
+}
+
 function isReport(v: Obj): boolean {
   return (
     isStr(v.headline) &&
@@ -242,7 +360,11 @@ function isReport(v: Obj): boolean {
     Array.isArray(v.rows) &&
     v.rows.length <= MAX_REPORT_ROWS &&
     v.rows.every(isRow) &&
-    isStrOrNull(v.focus)
+    isStrOrNull(v.focus) &&
+    (v.subhead === undefined || isStr(v.subhead)) &&
+    (v.positions === undefined ||
+      (Array.isArray(v.positions) && v.positions.length <= MAX_REPORT_POSITIONS && v.positions.every(isPosition))) &&
+    (v.cta === undefined || (isStr(v.cta) && v.cta.trim().length > 0 && v.cta.length <= MAX_CTA_LENGTH))
   );
 }
 
