@@ -65,6 +65,7 @@ import {
 import { ENGINE_CFG, DISPLAY_CFG, LEAK_CFG, POSTGAME_URL, REPEAT_CFG, SOURCE_CFG } from '../config';
 import { gamePlies } from '../diagnosis/areas';
 import { diagnose, type Diagnosis } from '../diagnosis/diagnose';
+import { EXAMPLE_SOURCES, EXAMPLES_MAX_LIMIT, examplesPage, type ExampleSource, type ExamplesPage } from '../diagnosis/examples';
 import { leakReport, type LeakReport } from '../diagnosis/leaks';
 import { positionKey } from '../diagnosis/repeated';
 import { guardDisplayEngine, memoDisplayEngine, type DisplayEngine, type SearchMemo } from '../engine/displayEngine';
@@ -78,6 +79,7 @@ import {
   toReportView,
   toStatusView,
   type QuickFix,
+  type ReportQuery,
 } from './views';
 
 /** Holds the one display engine (from `createDisplayEngine`), created on first use. */
@@ -199,6 +201,19 @@ function toQueries(a: QueryArgs): Query[] | string {
   }
   if (a.usernames && a.usernames.length > 0) return [query(a.usernames, a.maxGames)];
   return "Give the player's Chess.com usernames (or accounts).";
+}
+
+/**
+ * What a report was asked about, for its drill-down (coach_examples takes the same fields):
+ * the time class, the accounts or usernames as given, the game count for usernames, and asOf.
+ */
+function echoQuery(a: QueryArgs): ReportQuery {
+  const q: ReportQuery = { timeClass: a.timeClass };
+  if (a.accounts && a.accounts.length > 0) q.accounts = a.accounts.map((x) => ({ username: x.username, maxGames: x.maxGames }));
+  if (a.usernames && a.usernames.length > 0) q.usernames = [...a.usernames];
+  if (!q.accounts) q.maxGames = a.maxGames;
+  if (a.asOf) q.asOf = a.asOf;
+  return q;
 }
 
 // ---- small helpers ----
@@ -348,6 +363,36 @@ export function checkText(r: Extract<CheckResult, { legal: true }>, tally: strin
   return lines.join('\n');
 }
 
+/**
+ * A page of examples as text for the model: one line per game ("Move 23 (Qxb7): 82% → 30% (quick
+ * check)") with its date, the opponent's rating and the result, and its gameId and ply to ask it.
+ * No best move: the numbers are the quick check's.
+ */
+export function examplesText(p: ExamplesPage): string {
+  const n = p.examples.length;
+  const lines = [
+    `${p.title}: ${plural(p.total, 'game')}` +
+      (n > 0 ? `, showing ${p.offset + 1}–${p.offset + n}, newest first` : p.total > 0 ? `; none from ${p.offset + 1} on` : '') +
+      ' (win chances from the quick check, approximate).',
+  ];
+  p.examples.forEach((e, i) => {
+    const result = e.result === 'win' ? 'won' : e.result === 'loss' ? 'lost' : 'drawn';
+    lines.push(
+      `${p.offset + i + 1}. ${e.date}, vs ${e.opponentRating ?? 'unrated'}, ${result}, you were ${capitalize(e.myColor)}: ` +
+        `Move ${e.slipMoveNo} (${e.playedSan}): ${Math.round(e.quickWinBefore)}% → ${Math.round(e.quickWinAfter)}% (quick check). ` +
+        `gameId ${e.gameId}, ply ${e.slipPly}.`,
+    );
+  });
+  if (p.offset + n < p.total) lines.push(`More: call coach_examples again with offset ${p.offset + n}.`);
+  if (n > 0) {
+    lines.push(
+      'No best moves here: to practise one, call coach_ask_position with its gameId and ply (it is checked with a deeper ' +
+        'search first). Never name a better move for any of them before the player has tried.',
+    );
+  }
+  return lines.join('\n');
+}
+
 /** The habit "Keep the win" trains, in the words the coach says it. */
 export const BLUNDER_CHECK = "before every move when you're winning, check their checks, captures and threats";
 
@@ -405,8 +450,9 @@ export function coachMeText(username: string): string {
     '8. Close by saying what the next session does: it starts from my student file ("last time: …, 4 of 7 right"), ' +
       'and once I have played about 30 new games, it re-checks this focus on them with a fresh coach_diagnosis.',
     '',
-    'If I write "Coach me on this position: game <gameId>, ply <ply>", call coach_ask_position with that gameId and ply ' +
-      'and run the same try-first loop as step 4.',
+    'If I ask which games a finding comes from, call coach_examples with the same accounts (the board lists them, ' +
+      'newest first, with no answers). If I write "Coach me on this position: game <gameId>, ply <ply>", call ' +
+      'coach_ask_position with that gameId and ply and run the same try-first loop as step 4.',
     '',
     'Rules:',
     '- Never reveal the answer before I try: no best move, no evaluation and no hint that points at a move until ' +
@@ -1008,6 +1054,7 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
         drillsTotal: LEAK_CFG.drillsPerWeek,
         quickFixes,
         cta: DEFAULT_REPORT_CTA,
+        query: echoQuery(args),
       });
 
       const context = areaContext(a.d);
@@ -1041,9 +1088,54 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
             "Don't name any move in them.",
         );
       }
+      lines.push(
+        'The games behind each finding: coach_examples with these accounts and source thrownWins (the hero), a ' +
+          "situation's key (a bar) or quickFix with a quick fix's key (all in the card's data).",
+      );
       lines.push(...notes);
       if (o.skipped) lines.push(`${plural(o.skipped, 'game')} could not be read and ${o.skipped === 1 ? 'was' : 'were'} left out.`);
       return reply(lines.join('\n'), { ...view });
+    },
+  );
+
+  registerAppTool(
+    server,
+    'coach_examples',
+    {
+      title: 'Games behind a finding',
+      description:
+        "Lists the player's own games behind one finding of the report, newest first, a page at a time (at most " +
+        `${EXAMPLES_MAX_LIMIT}): source 'thrownWins' (games they were clearly winning and lost; the slip is their biggest ` +
+        "drop after that), a situation ('clock', 'winning', 'losing', 'opening', 'endgame', 'middlegame': each game's " +
+        "costliest move there), or 'quickFix' with a quick fix's key from coach_report (the games that reached that " +
+        'position). Each row has the date, the opponent\'s rating, the result, the move number and the move played, the ' +
+        "player's win chance before and after it (quick check, approximate), and its gameId and ply. No best moves and no " +
+        'engine lines: to practise one, call coach_ask_position with its gameId and ply. Pass the same accounts and time ' +
+        "class as the report (the card's query). " +
+        NO_INVENTED_FACTS,
+      inputSchema: {
+        source: z.enum(EXAMPLE_SOURCES as [ExampleSource, ...ExampleSource[]]).describe('Which finding: thrownWins, a situation key, or quickFix'),
+        key: z.string().trim().min(1).max(100).optional().describe("With source 'quickFix': the quick fix's key from coach_report"),
+        offset: z.number().int().min(0).default(0).describe('How many rows to skip (for the next page)'),
+        limit: z.number().int().min(1).default(EXAMPLES_MAX_LIMIT).describe(`Rows per page; at most ${EXAMPLES_MAX_LIMIT}`),
+        usernames: usernamesSchema,
+        accounts: accountsSchema,
+        timeClass: timeClassSchema,
+        maxGames: maxGamesSchema,
+        asOf: asOfSchema,
+      },
+      _meta: { ui: { resourceUri: BOARD_URI, visibility: ['model', 'app'] } },
+    },
+    async ({ source, key, offset, limit, ...args }) => {
+      const o = await diagnosisFor(args);
+      if (!o.ready) {
+        if (!o.waiting) return o.result;
+        const message = 'Your games are still being analysed. Ask again in a minute.';
+        return reply(message, { ...toStatusView('Still analysing your games', message, { done: o.done, total: o.total }) });
+      }
+      const page = examplesPage(o.a.games, o.a.usernames, { source, key, offset, limit });
+      if ('error' in page) return failure(page.error);
+      return reply(examplesText(page), { ...page });
     },
   );
 
