@@ -4,35 +4,29 @@
  * with a bare PATH, so Stockfish is found by absolute path (STOCKFISH_PATH, or the local config).
  *
  * At most two Stockfish processes per server: the background analysis engine (ENGINE_CFG,
- * owned by the runner) and the board engine (DISPLAY_CFG), each started on first use. Another
- * process (e.g. `npm run prewarm`) may run its own Stockfish at the same time.
+ * owned by the runner) and the board engine (DISPLAY_CFG), each started on first use. Every
+ * start of the analysis engine first checks free memory (Mac limits), so a diagnosis of games
+ * that are already cached never needs, or is refused, an engine. Another process (e.g.
+ * `npm run prewarm`) may run its own Stockfish at the same time.
  *
  * Fails at startup, before anything else, if the board widget is not built
  * (coach/dist/board.html): "run `npm run build:widgets` in coach/".
  *
  * Nothing may be written to stdout except MCP messages; logs go to stderr.
  */
-import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { parseFreeMemoryPct } from '../analysis/memoryPressure';
+import { memoryGuarded } from '../analysis/memoryPressure';
 import { createRunner } from '../analysis/runner';
-import { DISPLAY_CFG, loadLocalConfig } from '../config';
+import { loadLocalConfig } from '../config';
+import { createDisplayEngine, type DisplayEngine } from '../engine/displayEngine';
 import { createNativeStockfish, type NativeStockfish } from '../engine/nativeStockfish';
 import { createChesscomSource } from '../sources/chesscom';
 import { registerBoardResource } from './boardResource';
-import { registerCoachTools, type DisplayEngine } from './tools';
+import { registerCoachTools, type DisplaySlot } from './tools';
 
 const NAME = 'postgame-coach';
-
-function freeMemoryPct(): number | null {
-  try {
-    return parseFreeMemoryPct(execFileSync('/usr/bin/memory_pressure', { encoding: 'utf8', timeout: 5000 }));
-  } catch {
-    return null;
-  }
-}
 
 async function main(): Promise<void> {
   const server = new McpServer({ name: NAME, version: '0.1.0' });
@@ -41,22 +35,26 @@ async function main(): Promise<void> {
 
   let closing = false;
 
-  // Background analysis engine: the runner creates it lazily, and again if it dies.
+  // Background analysis engine: the runner creates it lazily (only for games not cached yet),
+  // and again if it dies. A refusal (shutting down, low memory) surfaces as the job's error.
   let analysis: NativeStockfish | null = null;
   let analysedBefore = 0;
-  const runner = createRunner(() => {
-    if (closing) throw new Error('The coach server is shutting down');
-    analysedBefore += analysis?.positionsSearched() ?? 0;
-    return (analysis = createNativeStockfish());
-  }, createChesscomSource());
+  const runner = createRunner(
+    memoryGuarded(() => {
+      if (closing) throw new Error('the coach server is shutting down');
+      analysedBefore += analysis?.positionsSearched() ?? 0;
+      return (analysis = createNativeStockfish());
+    }),
+    createChesscomSource(),
+  );
 
   // Board engine: deep search for every position shown, one instance, created on first use.
-  let board: NativeStockfish | null = null;
+  let board: DisplayEngine<NativeStockfish> | null = null;
   let boardSearchedBefore = 0;
-  const display: DisplayEngine = {
+  const display: DisplaySlot = {
     get() {
-      if (closing) throw new Error('The coach server is shutting down');
-      board ??= createNativeStockfish({ movetimeMs: DISPLAY_CFG.movetimeMs, multiPv: DISPLAY_CFG.multiPv });
+      if (closing) throw new Error('the coach server is shutting down');
+      board ??= createDisplayEngine();
       return board;
     },
     reset(failed) {
@@ -71,7 +69,6 @@ async function main(): Promise<void> {
   registerCoachTools(server, {
     runner,
     display,
-    freeMemoryPct,
     engineInfo() {
       const stockfishPath = loadLocalConfig().stockfishPath;
       return {

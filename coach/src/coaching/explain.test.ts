@@ -5,7 +5,8 @@ import type { Classification } from '../../../src/types';
 import { DISPLAY_CFG } from '../config';
 import { diagnose, type Diagnosis } from '../diagnosis/diagnose';
 import { fixtureGame, shuffleSans } from '../diagnosis/testGames';
-import { deepPositionFacts, examplePositions, positionFacts } from './explain';
+import { createDisplayEngine } from '../engine/displayEngine';
+import { deepDisagrees, deepPositionFacts, examplePositions, positionFacts, repeatedRefs } from './explain';
 
 // Made-up game: 1.e4 e5 2.Nf3 Nc6 3.Bc4 Nf6 4.Ng5 d5 5.exd5 Nxd5. Ply 5 is Black's ...Nf6.
 // Win numbers are fixture values (White's win % after each ply), not engine output.
@@ -34,19 +35,37 @@ const ev = (cp: number | null, mate: number | null, pvUci: string[] | null): Eva
   pvUci,
 });
 
-/** An engine that answers only the FENs it was given and records every search. */
-function scriptedEngine(byFen: Record<string, Evaluation>): Engine & { calls: { fen: string; ms: number }[] } {
+/** A display engine (built through createDisplayEngine) that answers only the FENs it was given and records every search. */
+function scriptedEngine(byFen: Record<string, Evaluation>) {
   const calls: { fen: string; ms: number }[] = [];
-  return {
+  return createDisplayEngine(() => ({
     calls,
-    async evaluate(fen, ms) {
+    async evaluate(fen: string, ms: number) {
       calls.push({ fen, ms });
       const e = byFen[fen];
       if (!e) throw new Error(`unexpected search: ${fen}`);
       return e;
     },
-  };
+  }));
 }
+
+describe('createDisplayEngine', () => {
+  it('builds the engine with the display settings', () => {
+    let seen: unknown = null;
+    createDisplayEngine((cfg) => {
+      seen = cfg;
+      return { evaluate: async () => ev(0, null, ['e2e4']) };
+    });
+    expect(seen).toMatchObject({ movetimeMs: DISPLAY_CFG.movetimeMs, multiPv: DISPLAY_CFG.multiPv });
+  });
+
+  it('deepPositionFacts only accepts a display engine (checked by tsc)', () => {
+    const quick: Engine = { evaluate: async () => ev(0, null, ['e2e4']) }; // e.g. the 30 ms analysis engine
+    // @ts-expect-error a plain Engine is not a DisplayEngine
+    const call = () => deepPositionFacts(italian(), 5, quick);
+    expect(typeof call).toBe('function');
+  });
+});
 
 describe('positionFacts (from the cache)', () => {
   it('positionFactsReadsRefutationFromNextPly', () => {
@@ -153,18 +172,39 @@ describe('deepPositionFacts (re-searched for display)', () => {
     await expect(deepPositionFacts(italian(), 5, illegal)).rejects.toThrow(/no usable best move/);
   });
 
-  it('does not search after checkmate: the mover has 100%', async () => {
+  it('does not search when the move gives checkmate: the mover has 100% before and after', async () => {
     // 1.e4 e5 2.Qh5 Nc6 3.Bc4 Nf6 4.Qxf7#: ply 6 mates.
     const sans = ['e4', 'e5', 'Qh5', 'Nc6', 'Bc4', 'Nf6', 'Qxf7#'];
     const c = fixtureGame({ id: 'https://example.test/game/mate', sans, wins: [50, 50, 50, 50, 50, 80, 100] });
-    const fenBefore = 'r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4';
-    const engine = scriptedEngine({ [fenBefore]: ev(null, 1, ['h5f7']) });
+    const engine = scriptedEngine({});
     const f = await deepPositionFacts(c, 6, engine);
-    expect(engine.calls.map((x) => x.fen)).toEqual([fenBefore]);
-    expect(f.winBefore).toBe(100);
-    expect(f.winAfter).toBe(100);
-    expect(f.refutationSan).toBeNull();
+    expect(engine.calls).toEqual([]);
+    expect(f).toMatchObject({ winBefore: 100, winAfter: 100, refutationSan: null, bestUci: null, bestSan: null, classification: 'best' });
+  });
+
+  it('a mating move is the best move even when the engine would mate another way', async () => {
+    // Back rank: both Ra8# and Rb8# mate. The player chose Rb8#; the engine's first choice is Ra8#.
+    const c = fixtureGame({ id: 'https://example.test/game/backrank', sans: ['Rb8#'], wins: [100] });
+    c.game.pgn = '[FEN "7k/6pp/8/8/8/8/8/RR4K1 w - - 0 1"]\n\n*';
+    const engine = scriptedEngine({ '7k/6pp/8/8/8/8/8/RR4K1 w - - 0 1': ev(null, 1, ['a1a8']) });
+    const f = await deepPositionFacts(c, 0, engine);
+    expect(engine.calls).toEqual([]);
+    expect(f.playedUci).toBe('b1b8');
     expect(f.bestUci).toBeNull();
+    expect(f.bestSan).toBeNull();
+    expect(f.bestLineSan).toEqual(['Rb8#']);
+    expect([f.winBefore, f.winAfter]).toEqual([100, 100]);
+  });
+});
+
+describe('deepDisagrees', () => {
+  it('is true only when the quick check said mistake or blunder and the deep check does not', () => {
+    expect(deepDisagrees('mistake', 'good')).toBe(true);
+    expect(deepDisagrees('blunder', 'inaccuracy')).toBe(true);
+    expect(deepDisagrees('blunder', 'best')).toBe(true);
+    expect(deepDisagrees('mistake', 'blunder')).toBe(false);
+    expect(deepDisagrees('blunder', 'mistake')).toBe(false);
+    expect(deepDisagrees('inaccuracy', 'best')).toBe(false);
   });
 });
 
@@ -213,6 +253,8 @@ describe('examplePositions', () => {
     expect(d.focus?.kind).toBe('repeated');
     const ex = examplePositions(d, rep, 3);
     expect(ex.map((f) => [f.gameId, f.ply, f.playedSan])).toEqual([['https://example.test/game/r2', 4, 'Bb5']]);
+    // Each repeated position also gets a reference to the same worst sighting.
+    expect(repeatedRefs(d, rep)).toEqual([{ gameId: 'https://example.test/game/r2', ply: 4 }]);
   });
 
   it('gives nothing without a focus', () => {

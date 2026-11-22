@@ -4,10 +4,11 @@ import { uciLineToSan } from '../../../src/analysis/lines';
 import { explainMistake } from '../../../src/analysis/reasons';
 import { evalToWinPct } from '../../../src/analysis/winPct';
 import { BEST_LINE_MAX_MOVES } from '../../../src/constants';
-import type { Engine, Evaluation } from '../../../src/services/engine/types';
-import type { Color } from '../../../src/types';
+import type { Evaluation } from '../../../src/services/engine/types';
+import type { Classification, Color } from '../../../src/types';
 import type { CachedGame } from '../analysis/cache';
 import { DISPLAY_CFG, REPEAT_CFG } from '../config';
+import type { DisplayEngine } from '../engine/displayEngine';
 import { gamePlies, type PlyFact } from '../diagnosis/areas';
 import type { Diagnosis } from '../diagnosis/diagnose';
 import { positionKey } from '../diagnosis/repeated';
@@ -84,25 +85,41 @@ function lineSan(fen: string, e: Evaluation): string[] | null {
 }
 
 /**
- * The same move re-searched at display depth (the engine should be built with DISPLAY_CFG).
- * Searches fenBefore (the mover to play) and fenAfter (the opponent to play) once each, and
- * replaces everything engine-made: win % (both the mover's), best move and line, the
- * refutation (the opponent's best line after the played move), and the classification and
- * reason derived from them, so no quick-search move can reach the screen next to a deep one.
- * `bestSan`/`bestUci` are null only when the played move is the deep search's first choice.
- * Checkmate or stalemate after the move is scored by the rules (100 / 50), without a search.
+ * The same move re-searched at display depth (DISPLAY_CFG; the type only accepts an engine
+ * from `createDisplayEngine`). Searches fenBefore (the mover to play) and fenAfter (the
+ * opponent to play) once each, and replaces everything engine-made: win % (both the mover's),
+ * best move and line, the refutation (the opponent's best line after the played move), and the
+ * classification and reason derived from them, so no quick-search move can reach the screen
+ * next to a deep one. `bestSan`/`bestUci` are null only when the played move is the deep
+ * search's first choice.
+ *
+ * Decided by the rules, without the search they make pointless:
+ * - the played move gives checkmate: it is the best move (another mate is no better), the
+ *   mover's win chance is 100% before and after, the best line is the move itself; no search;
+ * - stalemate after the move: 50% after; only fenBefore is searched.
  */
-export async function deepPositionFacts(c: CachedGame, ply: number, engine: Engine): Promise<PositionFacts> {
+export async function deepPositionFacts(c: CachedGame, ply: number, engine: DisplayEngine): Promise<PositionFacts> {
   const base = positionFacts(c, ply);
-  const before = await engine.evaluate(base.fenBefore, DISPLAY_CFG.movetimeMs);
   const after = new Chess(base.fenAfter);
-  const mate = after.isCheckmate();
-  const terminal = mate || after.isStalemate();
-  const afterEval = terminal ? null : await engine.evaluate(base.fenAfter, DISPLAY_CFG.movetimeMs);
+  if (after.isCheckmate()) {
+    return {
+      ...base,
+      bestSan: null,
+      bestUci: null,
+      bestLineSan: [base.playedSan],
+      refutationSan: null,
+      winBefore: 100,
+      winAfter: 100,
+      classification: 'best',
+      reason: null,
+    };
+  }
+  const before = await engine.evaluate(base.fenBefore, DISPLAY_CFG.movetimeMs);
+  const afterEval = after.isStalemate() ? null : await engine.evaluate(base.fenAfter, DISPLAY_CFG.movetimeMs);
 
   const winBefore = evalToWinPct(before.cp, before.mate);
   // The after-search is from the opponent's side: flip it (never a mate-0 eval: terminal positions aren't searched).
-  const winAfter = afterEval ? 100 - evalToWinPct(afterEval.cp, afterEval.mate) : mate ? 100 : 50;
+  const winAfter = afterEval ? 100 - evalToWinPct(afterEval.cp, afterEval.mate) : 50;
   const bestLineSan = lineSan(base.fenBefore, before);
   const engineBestUci = before.bestMoveUci ?? before.pvUci?.[0] ?? null;
   // A missing or unplayable best move must not read as "the played move was best" on the board.
@@ -156,8 +173,52 @@ function ownGames(d: Diagnosis, games: CachedGame[]): { c: CachedGame; plies: Pl
   return out;
 }
 
-const byLossThenId = (a: { loss: number; c: CachedGame; ply: number }, b: { loss: number; c: CachedGame; ply: number }) =>
-  b.loss - a.loss || a.c.game.id.localeCompare(b.c.game.id) || a.ply - b.ply;
+type Pick = { c: CachedGame; ply: number; loss: number };
+
+const byLossThenId = (a: Pick, b: Pick) => b.loss - a.loss || a.c.game.id.localeCompare(b.c.game.id) || a.ply - b.ply;
+
+/**
+ * For each position key, the player's sighting with the largest loss among those that lost at
+ * least REPEAT_CFG.wrongLossPts. Like `findRepeated`, only the first time a game reached the
+ * position counts.
+ */
+function worstSightings(keys: string[], own: { c: CachedGame; plies: PlyFact[] }[]): Map<string, Pick> {
+  const wanted = new Set(keys);
+  const worst = new Map<string, Pick>();
+  for (const { c, plies } of own) {
+    const seen = new Set<string>();
+    for (const p of plies) {
+      if (!p.mine) continue;
+      const key = positionKey(p.fenBefore);
+      if (!wanted.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      if (p.lossPts < REPEAT_CFG.wrongLossPts) continue;
+      const pick = { c, ply: p.ply, loss: p.lossPts };
+      const cur = worst.get(key);
+      if (!cur || byLossThenId(pick, cur) < 0) worst.set(key, pick);
+    }
+  }
+  return worst;
+}
+
+/**
+ * One reference per repeated position in `d.repeated` (same order): the player's sighting with
+ * the largest loss, to open with coach_explain_position; null if none is found.
+ */
+export function repeatedRefs(d: Diagnosis, games: CachedGame[]): ({ gameId: string; ply: number } | null)[] {
+  const worst = worstSightings(d.repeated.map((r) => r.key), ownGames(d, games));
+  return d.repeated.map((r) => {
+    const p = worst.get(r.key);
+    return p ? { gameId: p.c.game.id, ply: p.ply } : null;
+  });
+}
+
+const SERIOUS: ReadonlySet<Classification> = new Set<Classification>(['mistake', 'blunder']);
+
+/** True when the quick analysis called a move a mistake or blunder but the deep check does not. */
+export function deepDisagrees(quick: Classification, deep: Classification): boolean {
+  return SERIOUS.has(quick) && !SERIOUS.has(deep);
+}
 
 /**
  * Up to `n` of the player's own moves that show the diagnosis focus, from the cache:
@@ -173,7 +234,7 @@ export function examplePositions(d: Diagnosis, games: CachedGame[], n: number): 
   const focus = d.focus;
   if (!focus || n <= 0) return [];
   const own = ownGames(d, games);
-  const picks: { c: CachedGame; ply: number; loss: number }[] = [];
+  const picks: Pick[] = [];
 
   if (focus.kind === 'area') {
     for (const { c, plies } of own) {
@@ -185,14 +246,10 @@ export function examplePositions(d: Diagnosis, games: CachedGame[], n: number): 
     }
     picks.sort(byLossThenId);
   } else {
+    const worst = worstSightings(focus.keys, own);
     for (const key of focus.keys) {
-      const sightings: { c: CachedGame; ply: number; loss: number }[] = [];
-      for (const { c, plies } of own) {
-        const first = plies.find((p) => p.mine && positionKey(p.fenBefore) === key);
-        if (first && first.lossPts >= REPEAT_CFG.wrongLossPts) sightings.push({ c, ply: first.ply, loss: first.lossPts });
-      }
-      const worst = sightings.sort(byLossThenId)[0];
-      if (worst) picks.push(worst);
+      const p = worst.get(key);
+      if (p) picks.push(p);
     }
   }
   return picks.slice(0, n).map((p) => positionFacts(p.c, p.ply));
