@@ -176,13 +176,46 @@ describe('runner', () => {
     expect(final.done).toBe(0);
   });
 
-  it('skipsAGameWithAnUnparseablePgnAndKeepsGoing', async () => {
-    const bad = { ...game(2), pgn: 'this is not a pgn at all 1. zz9' };
-    const runner = createRunner(() => fakeEngine(), fakeSource([game(1), bad, game(3)]));
+  it('skipsAFewUnparseableGamesAndKeepsGoing', async () => {
+    const games = Array.from({ length: 12 }, (_, i) => game(i + 1));
+    games[4] = { ...games[4], pgn: 'this is not a pgn at all 1. zz9' };
+    const runner = createRunner(() => fakeEngine(), fakeSource(games));
     const s = await runner.start(Q);
     const final = await waitDone(runner, s.jobId);
-    expect(final).toMatchObject({ state: 'done', done: 3, skipped: 1 });
-    expect(await runner.load(Q)).toHaveLength(2);
+    expect(final).toMatchObject({ state: 'done', done: 12, skipped: 1, skippedIds: [games[4].id] });
+    expect(final.skipReason).toBeTruthy();
+    expect(await runner.load(Q)).toHaveLength(11);
+  });
+
+  it('allGamesFailingMarksJobError', async () => {
+    const games = [game(1), game(2), game(3)].map((g) => ({ ...g, pgn: 'garbage 1. zz9' }));
+    const runner = createRunner(() => fakeEngine(), fakeSource(games));
+    const s = await runner.start(Q);
+    const final = await waitDone(runner, s.jobId);
+    expect(final.state).toBe('error');
+    expect(final.error).toMatch(/could not be analysed: /);
+    expect(final.skipReason).toBeTruthy();
+    expect(final.skippedIds?.length).toBeGreaterThan(0);
+  });
+
+  it('moreThanTenPercentSkippedMarksJobError', async () => {
+    const games = Array.from({ length: 12 }, (_, i) => game(i + 1));
+    games[1] = { ...games[1], pgn: 'bad 1. zz9' };
+    games[7] = { ...games[7], pgn: 'bad 1. zz9' };
+    const runner = createRunner(() => fakeEngine(), fakeSource(games));
+    const final = await waitDone(runner, (await runner.start(Q)).jobId);
+    expect(final).toMatchObject({ state: 'error', skipped: 2 });
+  });
+
+  it('skippedGamesAreRetriedOnTheNextStart', async () => {
+    const games = Array.from({ length: 12 }, (_, i) => game(i + 1));
+    const bad = { ...games[4], pgn: 'bad 1. zz9' };
+    const src = fakeSource([...games.slice(0, 4), bad, ...games.slice(5)]);
+    const runner = createRunner(() => fakeEngine(), src);
+    await waitDone(runner, (await runner.start(Q)).jobId);
+    const again = await runner.start(Q);
+    expect(again.cached).toBe(11); // the skipped one is not cached, so it is attempted again
+    await waitDone(runner, again.jobId);
   });
 
   it('joinsARunningJobWithTheSameQuery', async () => {
@@ -196,6 +229,74 @@ describe('runner', () => {
     expect(c.jobId).not.toBe(a.jobId);
   });
 
+  it('loadMakesNoNetworkCallAfterStart', async () => {
+    const src = fakeSource([game(1), game(2)]);
+    const runner = createRunner(() => fakeEngine(), src);
+    await waitDone(runner, (await runner.start(Q)).jobId);
+    expect(src.calls).toBe(1);
+    expect(await runner.load(Q)).toHaveLength(2);
+    expect(await runner.load(Q)).toHaveLength(2);
+    expect(src.calls).toBe(1);
+  });
+
+  it('loadReturnsFreshGameMetadata', async () => {
+    const src = fakeSource([game(1)]);
+    const runner = createRunner(() => fakeEngine(), src);
+    await waitDone(runner, (await runner.start(Q)).jobId);
+    // A later fetch window changes the pre-game rating of the same game.
+    src.fetchGames = async () => [{ ...game(1), myPreRating: 1234 }];
+    const second = await runner.start(Q);
+    await waitDone(runner, second.jobId);
+    const [c] = await runner.load(Q);
+    expect(c.game.myPreRating).toBe(1234);
+    expect(c.analysis.plies.length).toBe(4);
+  });
+
+  it('fullyCachedQueryIsDoneImmediately', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const slowEngine = fakeEngine();
+    const slowEval = slowEngine.evaluate;
+    slowEngine.evaluate = async () => (await gate, slowEval());
+    const src: GameSource = {
+      fetchGames: async (users) => (users[0] === 'carol' ? [game(9, 'carol')] : [game(1)]),
+    };
+    const runner = createRunner(() => slowEngine, src);
+    // Seed the cache for query Q with a separate runner, then keep another job busy on a different query.
+    const seed = createRunner(() => fakeEngine(), fakeSource([game(1)]));
+    await waitDone(seed, (await seed.start(Q)).jobId);
+    const other = await runner.start({ ...Q, usernames: ['carol'], maxGames: 7 });
+    expect(runner.status(other.jobId).state).toBe('running');
+    const cachedStart = await runner.start(Q);
+    expect(cachedStart).toMatchObject({ total: 1, cached: 1 });
+    expect(runner.status(cachedStart.jobId)).toMatchObject({ state: 'done', done: 1 });
+    release();
+    await runner.wait(other.jobId);
+  });
+
+  it('hungEngineTimesOut', async () => {
+    const engines: ReturnType<typeof fakeEngine>[] = [];
+    const factory = () => {
+      const e = fakeEngine();
+      if (engines.length === 0) e.evaluate = () => new Promise<Evaluation>(() => {}); // never answers
+      engines.push(e);
+      return e;
+    };
+    const runner = createRunner(factory, fakeSource([game(1), game(2)]), { evaluateTimeoutMs: 30 });
+    const final = await waitDone(runner, (await runner.start(Q)).jobId);
+    expect(final).toMatchObject({ state: 'done', done: 2 });
+    expect(engines).toHaveLength(2);
+    expect(engines[0].closed).toBe(1);
+  });
+
+  it('hungEngineThatStaysHungMarksJobError', async () => {
+    const factory = () => ({ evaluate: () => new Promise<Evaluation>(() => {}), close: async () => {} });
+    const runner = createRunner(factory, fakeSource([game(1)]), { evaluateTimeoutMs: 20 });
+    const final = await waitDone(runner, (await runner.start(Q)).jobId);
+    expect(final.state).toBe('error');
+    expect(final.error).toMatch(/hung/);
+  });
+
   it('reports an unknown job as an error', () => {
     const runner = createRunner(() => fakeEngine(), fakeSource([]));
     expect(runner.status('nope')).toMatchObject({ state: 'error' });
@@ -207,7 +308,7 @@ describe('cache', () => {
     expect(cacheKey('a')).toBe(cacheKey('a'));
     expect(cacheKey('a')).not.toBe(cacheKey('b'));
     expect(cacheKey('a')).toMatch(/^[0-9a-f]{64}$/);
-    expect(ENGINE_CFG.movetimeMs).toBeGreaterThan(0);
+    expect(ENGINE_CFG.movetimeMs).toBe(30);
   });
 
   it('writesAtomicallyAndReadsBack', async () => {
