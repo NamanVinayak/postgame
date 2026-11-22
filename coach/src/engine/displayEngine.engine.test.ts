@@ -17,21 +17,24 @@ afterEach(async () => {
   await Promise.all(open.splice(0).map((e) => e.close()));
 });
 
-async function searchAll(): Promise<Evaluation[]> {
-  const engine = createNativeStockfish(DISPLAY_SETTINGS); // a fresh process: nothing carried over
+/** Each position's answer from one fresh engine process, searching the positions in `order`. */
+async function searchAll(order: string[]): Promise<Map<string, Evaluation>> {
+  const engine = createNativeStockfish(DISPLAY_SETTINGS);
   open.push(engine);
-  const out: Evaluation[] = [];
-  for (const fen of FENS) out.push(await engine.evaluate(fen, 0));
+  const out = new Map<string, Evaluation>();
+  for (const fen of order) out.set(fen, await engine.evaluate(fen, 0));
   return out;
 }
 
 describe('display search', () => {
   it('sameFenSameAnswerAcrossInstances', async () => {
-    const [a, b] = await Promise.all([searchAll(), searchAll()]);
-    for (let i = 0; i < FENS.length; i++) {
-      expect(a[i].bestMoveUci).toBeTruthy();
+    // The second instance searches in the opposite order, so a position comes after different
+    // earlier searches: the answers can only agree if nothing carries over between searches.
+    const [a, b] = await Promise.all([searchAll(FENS), searchAll([...FENS].reverse())]);
+    for (const fen of FENS) {
+      expect(a.get(fen)?.bestMoveUci).toBeTruthy();
       // Same best move, score, line and second choice: the whole answer, not just the move.
-      expect(b[i]).toEqual(a[i]);
+      expect(b.get(fen)).toEqual(a.get(fen));
     }
   });
 });
