@@ -17,7 +17,7 @@ function parseTimeControl(tc: string): { baseSec: number; incSec: number } {
   return { baseSec: Number(m[1]), incSec: m[2] ? Number(m[2]) : 0 };
 }
 
-/** One account's rated, standard-chess games of one time class, newest first, with pre-game ratings. */
+/** A rated standard-chess game of one time class, before its pre-game rating is known. */
 type Candidate = Omit<CoachGame, 'myPreRating'>;
 
 async function getJson(fetchImpl: typeof fetch, url: string): Promise<any> {
@@ -40,7 +40,7 @@ async function fetchForUser(
   const archives: string[] = Array.isArray(data.archives) ? data.archives : [];
 
   const seen = new Set<string>();
-  let cands: Candidate[] = []; // newest first
+  const cands: Candidate[] = []; // newest first
   let reachedStart = archives.length === 0;
 
   /** Games that pass the window, newest first. The oldest candidate's pre-rating is unknown until an older one shows up. */
