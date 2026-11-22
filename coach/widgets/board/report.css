@@ -1,5 +1,5 @@
-/* Report card ("scouting report"). It paints its own card, so it carries its own tokens:
-   dark by default (with no host theme too), light only when the host says light. */
+/* Report card v4 and the status card. They paint their own card, so they carry their own
+   tokens: dark by default (with no host theme too), light only when the host says light. */
 
 /* Two classes, so this wins over .pg-wrap in widget.css whatever the bundle order. */
 .pg-wrap.pg-wrap--report {
@@ -17,32 +17,14 @@
   --rc-soft: #a3adbd;
   --rc-muted: #8b95a7;
   --rc-rule: rgba(148, 163, 184, 0.14);
-  --rc-accent: #5eead4; /* graphics: strokes, fills, focus rings */
-  --rc-accent-text: #5eead4; /* small text in the accent colour */
-  --rc-fill0: rgba(94, 234, 212, 0.14);
-  --rc-fill1: rgba(94, 234, 212, 0.42);
+  --rc-accent: #5eead4; /* graphics: bars, fills, focus rings */
+  --rc-accent-text: #5eead4; /* text in the accent colour */
   --rc-glow: rgba(94, 234, 212, 0.5);
-  --rc-peer: rgba(226, 232, 240, 0.85);
-  --rc-grid: rgba(148, 163, 184, 0.15);
-  --rc-range: rgba(94, 234, 212, 0.34);
-  --rc-range-tick: rgba(94, 234, 212, 0.8);
-  --rc-dot: #0b1220;
-  --rc-unknown: #94a3b8; /* areas with too few games: dotted segments, "?" ring */
-  --rc-good-bg: rgba(34, 197, 94, 0.14);
-  --rc-good-fg: #86efac;
-  --rc-good-icon: #22c55e;
-  --rc-good-on: #052e16;
-  --rc-bad-bg: rgba(244, 63, 94, 0.16);
-  --rc-bad-fg: #fda4af;
-  --rc-bad-icon: #f43f5e;
-  --rc-bad-on: #ffffff;
-  --rc-neutral-bg: rgba(148, 163, 184, 0.16);
-  --rc-neutral-fg: #cbd5e1;
-  --rc-neutral-icon: #94a3b8;
-  --rc-neutral-on: #0f172a;
+  --rc-bar: linear-gradient(90deg, #2dd4bf, #5eead4);
+  --rc-bar-track: rgba(148, 163, 184, 0.12);
+  --rc-range: rgba(94, 234, 212, 0.3); /* the likely range around each bar, one style for all */
   --rc-wrong: #fb7185;
   --rc-best: #4ade80;
-  --rc-loss: #fda4af;
   --rc-card-bg: rgba(255, 255, 255, 0.035);
   --rc-card-border: rgba(148, 163, 184, 0.14);
   --rc-card-shadow: none;
@@ -73,30 +55,12 @@
   --rc-rule: rgba(15, 23, 42, 0.08);
   --rc-accent: #0d9488;
   --rc-accent-text: #0f766e;
-  --rc-fill0: rgba(13, 148, 136, 0.08);
-  --rc-fill1: rgba(13, 148, 136, 0.26);
   --rc-glow: rgba(13, 148, 136, 0.28);
-  --rc-peer: rgba(15, 23, 42, 0.72);
-  --rc-grid: rgba(15, 23, 42, 0.09);
-  --rc-range: rgba(13, 148, 136, 0.3);
-  --rc-range-tick: rgba(13, 148, 136, 0.85);
-  --rc-dot: #ffffff;
-  --rc-unknown: #6b7890; /* >= 3:1 on every part of the light card, faded wedges included */
-  --rc-good-bg: rgba(22, 163, 74, 0.1);
-  --rc-good-fg: #166534;
-  --rc-good-icon: #16a34a;
-  --rc-good-on: #ffffff;
-  --rc-bad-bg: rgba(225, 29, 72, 0.09);
-  --rc-bad-fg: #be123c;
-  --rc-bad-icon: #e11d48;
-  --rc-bad-on: #ffffff;
-  --rc-neutral-bg: rgba(100, 116, 139, 0.12);
-  --rc-neutral-fg: #475569;
-  --rc-neutral-icon: #94a3b8;
-  --rc-neutral-on: #ffffff;
+  --rc-bar: linear-gradient(90deg, #0f766e, #14b8a6);
+  --rc-bar-track: rgba(15, 23, 42, 0.07);
+  --rc-range: rgba(13, 148, 136, 0.26);
   --rc-wrong: #e11d48;
   --rc-best: #15803d;
-  --rc-loss: #be123c;
   --rc-card-bg: #ffffff;
   --rc-card-border: rgba(15, 23, 42, 0.07);
   --rc-card-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 8px 24px rgba(15, 23, 42, 0.06);
@@ -146,8 +110,9 @@
   font: inherit;
 }
 
-/* Header */
-.rc-head {
+/* Header and hero */
+.rc-head,
+.rc-body {
   position: relative;
 }
 .rc-topline {
@@ -180,25 +145,34 @@
 .rc-ghost:hover {
   filter: brightness(1.15);
 }
-.rc-titleRow {
+.rc-heroRow {
   display: flex;
   justify-content: space-between;
-  align-items: flex-end;
-  gap: 16px;
+  align-items: flex-start;
+  gap: 20px;
+  margin-top: 8px;
 }
-.rc-title {
-  margin: 2px 0 0;
+.rc-heroLine {
+  margin: 0;
   color: var(--rc-strong);
-  font: 700 30px/1.05 -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+  font: 700 28px/1.12 -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
   letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+.rc-heroSub {
+  margin: 8px 0 0;
+  color: var(--rc-accent-text);
+  font: 650 18px/1.3 -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+  letter-spacing: -0.01em;
 }
 .rc-meta {
-  text-align: right;
   flex: none;
+  text-align: right;
+  padding-top: 2px;
 }
 .rc-metaBig {
   color: var(--rc-strong);
-  font: 700 30px/1 -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+  font: 700 28px/1 -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
 }
@@ -210,306 +184,13 @@
   color: var(--rc-muted);
 }
 
-/* Radar */
-.rc-body {
-  position: relative;
-}
-.rc-left {
-  margin: 10px -8px 0;
-}
-.rc-radar {
-  position: relative;
-  width: 100%;
-  max-width: 560px;
-  margin: 0 auto;
-}
-.rc-radar svg {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  overflow: visible;
-}
-.rc-grid {
-  fill: none;
-  stroke: var(--rc-grid);
-  stroke-width: 1;
-}
-.rc-spoke {
-  stroke: var(--rc-grid);
-  stroke-width: 1;
-}
-.rc-spoke--faint {
-  stroke-dasharray: 2 4;
-  opacity: 0.7;
-}
-/* Every band the same, on every spoke and in the legend: one colour, one width in screen pixels. */
-.rc-range {
-  stroke: var(--rc-range);
-  stroke-width: 6;
-  stroke-linecap: round;
-  vector-effect: non-scaling-stroke;
-}
-/* Where the chart's edge cuts a band. */
-.rc-rangeTick {
-  stroke: var(--rc-range-tick);
-  stroke-width: 2;
-  stroke-linecap: round;
-  vector-effect: non-scaling-stroke;
-}
-.rc-stop0 {
-  stop-color: var(--rc-fill0);
-}
-.rc-stop1 {
-  stop-color: var(--rc-fill1);
-}
-.rc-peer {
-  fill: none;
-  stroke: var(--rc-peer);
-  stroke-width: 1.5;
-  stroke-dasharray: 5 5;
-  stroke-linejoin: round;
-}
-.rc-you {
-  stroke: var(--rc-accent);
-  stroke-width: 2.2;
-  stroke-linejoin: round;
-}
-.rc-youGlow {
-  fill: none;
-  stroke: var(--rc-glow);
-  stroke-width: 6;
-}
-.rc-youDot {
-  fill: var(--rc-dot);
-  stroke: var(--rc-accent);
-  stroke-width: 2;
-}
-.rc-youFill {
-  stroke: none;
-}
-.rc-youFade {
-  stroke: none;
-  opacity: 0.32;
-}
-.rc-youUnknown {
-  fill: none;
-  stroke: var(--rc-unknown);
-  stroke-width: 2;
-  stroke-dasharray: 0.1 5;
-  stroke-linecap: round;
-}
-.rc-unknownRing {
-  fill: var(--rc-dot);
-  stroke: var(--rc-unknown);
-  stroke-width: 1.5;
-}
-.rc-unknownQ {
-  fill: var(--rc-muted);
-  font: 700 9.5px/1 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-  text-anchor: middle;
-  dominant-baseline: central;
-}
-.rc-axis {
-  position: absolute;
-  transform: translate(-50%, -50%);
-  text-align: center;
-  white-space: nowrap;
-}
-.rc-axisName {
-  font-weight: 650;
-  font-size: 13px;
-  color: var(--rc-strong);
-}
-.rc-axisNums {
-  font-size: 12px;
-  margin-top: 1px;
-  font-variant-numeric: tabular-nums;
-}
-.rc-axisNums b {
-  color: var(--rc-accent-text);
-  font-weight: 650;
-}
-.rc-axisNums span {
-  color: var(--rc-muted);
-}
-.rc-axis--faint .rc-axisName,
-.rc-axis--faint .rc-axisNums span {
-  color: var(--rc-muted);
-}
-
-/* Verdict chips */
-.rc-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  margin-top: 4px;
-  padding: 2px 9px 2px 4px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.rc-chipIcon {
-  display: inline-grid;
-  place-items: center;
-  width: 15px;
-  height: 15px;
-  border-radius: 50%;
-  font-size: 10px;
-  line-height: 1;
-}
-.rc-chip--good {
-  background: var(--rc-good-bg);
-  color: var(--rc-good-fg);
-}
-.rc-chip--good .rc-chipIcon {
-  background: var(--rc-good-icon);
-  color: var(--rc-good-on);
-}
-.rc-chip--bad {
-  background: var(--rc-bad-bg);
-  color: var(--rc-bad-fg);
-}
-.rc-chip--bad .rc-chipIcon {
-  background: var(--rc-bad-icon);
-  color: var(--rc-bad-on);
-}
-.rc-chip--neutral,
-.rc-chip--faint {
-  background: var(--rc-neutral-bg);
-  color: var(--rc-neutral-fg);
-}
-.rc-chip--neutral .rc-chipIcon,
-.rc-chip--faint .rc-chipIcon {
-  background: var(--rc-neutral-icon);
-  color: var(--rc-neutral-on);
-}
-
-/* Fewer than three areas: a plain list instead of the chart */
-.rc-areaList {
-  list-style: none;
-  margin: 14px 0 0;
-  padding: 0 8px;
-}
-.rc-areaList li {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  padding: 8px 0;
-  border-top: 1px solid var(--rc-rule);
-}
-.rc-areaList li:first-child {
-  border-top: 0;
-}
-.rc-areaList .rc-axisName {
-  min-width: 140px;
-}
-.rc-areaList .rc-chip {
-  margin-top: 0;
-}
-
-/* Legend */
-.rc-legend {
-  margin-top: 6px;
-  padding: 0 8px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--rc-soft);
-}
-.rc-keys {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 4px 16px;
-}
-.rc-keys span {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.rc-keys i {
-  display: inline-block;
-}
-.rc-kYou {
-  width: 14px;
-  height: 10px;
-  border-radius: 3px;
-  background: var(--rc-fill1);
-  border: 1.5px solid var(--rc-accent);
-}
-.rc-keySvg {
-  display: inline-block;
-  flex: none;
-  overflow: visible;
-}
-.rc-kFaded {
-  width: 14px;
-  height: 10px;
-  border-radius: 3px;
-  background: var(--rc-fill1);
-  opacity: 0.45;
-  outline: 1.5px dotted var(--rc-unknown);
-  outline-offset: -1.5px;
-}
-.rc-legendStrong {
-  margin-top: 6px;
-  color: var(--rc-strong);
-  font-weight: 600;
-}
-.rc-legendLine {
-  margin-top: 2px;
-  color: var(--rc-soft);
-}
-.rc-legendNote {
-  margin: 3px auto 0;
-  max-width: 440px;
-  color: var(--rc-muted);
-  font-size: 11.5px;
-}
-
-/* Verdict */
-.rc-right {
-  position: relative;
-  margin-top: 18px;
-}
-.rc-verdict {
-  padding-top: 16px;
-  border-top: 1px solid var(--rc-rule);
-}
-.rc-kicker {
-  font-size: 11px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--rc-muted);
-  font-weight: 600;
-}
-.rc-verdictText {
-  margin: 6px 0 0;
-  color: var(--rc-strong);
-  font: 650 23px/1.2 -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
-  letter-spacing: -0.015em;
-}
-.rc-verdictText em {
-  font-style: normal;
-  color: var(--rc-accent-text);
-}
-.rc-sub {
-  margin: 8px 0 0;
-  color: var(--rc-soft);
-  font-size: 14px;
-}
-
-/* Missions */
-.rc-missions {
-  margin-top: 20px;
-}
+/* Section headings */
 .rc-secHead {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 4px 12px;
 }
 .rc-secHead h3 {
   margin: 0;
@@ -518,31 +199,146 @@
   font-weight: 650;
   letter-spacing: -0.005em;
 }
-.rc-count {
+.rc-secNote {
+  color: var(--rc-muted);
+  font-size: 12px;
+}
+.rc-kRange {
+  display: inline-block;
+  width: 16px;
+  height: 8px;
+  border-radius: 3px;
+  background: var(--rc-range);
+  vertical-align: -0.05em;
+}
+
+/* Where your points go: ranked bars on one scale from 0 */
+.rc-left {
+  margin-top: 22px;
+}
+.rc-leakList {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+.rc-leakHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.rc-leakLabel {
+  color: var(--rc-strong);
+  font-weight: 600;
+}
+.rc-leakPct {
+  color: var(--rc-strong);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+/* The range is a soft band 3 px taller than the bar on each side, behind the bar. */
+.rc-leakTrack {
+  position: relative;
+  height: 16px;
+  margin-top: 4px;
+}
+.rc-leakTrack::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 3px;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--rc-bar-track);
+}
+.rc-leakRange {
+  position: absolute;
+  top: 0;
+  height: 16px;
+  border-radius: 5px;
+  background: var(--rc-range);
+}
+.rc-leakFill {
+  position: absolute;
+  left: 0;
+  top: 3px;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--rc-bar);
+}
+.rc-leakDetail {
+  margin-top: 3px;
+  color: var(--rc-soft);
+  font-size: 12.5px;
+}
+.rc-context {
+  margin: 16px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--rc-rule);
+  color: var(--rc-muted);
+  font-size: 13px;
+}
+
+/* This week */
+.rc-right {
+  margin-top: 22px;
+}
+.rc-focus {
+  padding: 16px 16px 14px;
+  border-radius: 16px;
+  background: var(--rc-card-bg);
+  border: 1px solid var(--rc-card-border);
+  box-shadow: var(--rc-card-shadow);
+}
+.rc-kicker {
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--rc-accent-text);
+  font-weight: 700;
+}
+.rc-focusTitle {
+  margin: 2px 0 0;
+  color: var(--rc-strong);
+  font: 700 22px/1.2 -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+  letter-spacing: -0.015em;
+}
+.rc-focusLine {
+  margin: 4px 0 0;
+  color: var(--rc-soft);
+}
+.rc-estimate {
+  display: inline-block;
+  margin: 8px 0 0;
   padding: 3px 10px;
   border-radius: 999px;
   background: var(--rc-pill-bg);
   color: var(--rc-pill-fg);
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 650;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
-.rc-missionList {
+.rc-prompt {
+  margin: 12px 0 0;
+  color: var(--rc-strong);
+  font-weight: 600;
+}
+.rc-boards {
   display: grid;
-  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
   margin-top: 10px;
 }
-.rc-mission {
-  display: grid;
-  grid-template-columns: 116px minmax(0, 1fr);
-  gap: 14px;
-  align-items: center;
-  padding: 10px 14px 10px 10px;
-  border-radius: 14px;
-  background: var(--rc-card-bg);
-  border: 1px solid var(--rc-card-border);
-  box-shadow: var(--rc-card-shadow);
+.rc-boardFig {
+  margin: 0;
+}
+.rc-boardFig figcaption {
+  margin-top: 6px;
+  color: var(--rc-muted);
+  font-size: 12px;
+  text-align: center;
 }
 .rc-mini {
   width: 100%;
@@ -550,55 +346,20 @@
   overflow: hidden;
   box-shadow: var(--rc-board-shadow);
 }
-.rc-mKicker {
-  font-size: 10.5px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--rc-accent-text);
-  font-weight: 700;
-}
-.rc-mTitle {
-  margin-top: 1px;
-  color: var(--rc-strong);
-  font-size: 17px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-}
-.rc-best {
-  color: var(--rc-best);
-}
-.rc-wrong {
-  color: var(--rc-wrong);
-  font-weight: 650;
-  text-decoration-thickness: 1.5px;
-}
-.rc-mMeta {
-  margin-top: 2px;
-  color: var(--rc-soft);
-  font-size: 12.5px;
-  line-height: 1.35;
-}
-.rc-mLoss {
-  margin-top: 3px;
-  color: var(--rc-loss);
-  font-size: 12.5px;
-  font-weight: 650;
-  font-variant-numeric: tabular-nums;
-}
 .rc-progress {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-top: 7px;
+  margin-top: 14px;
   color: var(--rc-muted);
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .rc-bar {
   flex: 1;
-  height: 5px;
+  height: 6px;
   border-radius: 3px;
   background: var(--rc-track);
   overflow: hidden;
@@ -608,12 +369,60 @@
   border-radius: 3px;
   background: var(--rc-progress);
 }
-.rc-focus {
-  margin: 18px 0 0;
-  padding: 10px 12px;
-  border-radius: 12px;
+
+/* Quick fixes */
+.rc-fixes {
+  margin-top: 18px;
+}
+.rc-fixList {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+.rc-fix {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  padding: 10px 14px 10px 10px;
+  border-radius: 14px;
   background: var(--rc-card-bg);
   border: 1px solid var(--rc-card-border);
+  box-shadow: var(--rc-card-shadow);
+}
+.rc-fixLabel {
+  color: var(--rc-strong);
+  font-weight: 650;
+}
+.rc-fixMeta {
+  margin-top: 2px;
+  color: var(--rc-soft);
+  font-size: 12.5px;
+}
+.rc-wrong {
+  color: var(--rc-wrong);
+  font-weight: 650;
+  text-decoration-thickness: 1.5px;
+}
+.rc-best {
+  color: var(--rc-best);
+}
+.rc-fixAnswer {
+  margin-top: 4px;
+  color: var(--rc-strong);
+  font-weight: 650;
+}
+.rc-fixHidden {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--rc-ghost-bg);
+  color: var(--rc-muted);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 /* Call to action */
@@ -652,106 +461,68 @@
   text-align: center;
 }
 
-/* Fullscreen: the chart on the left, verdict and missions on the right. */
+/* Fullscreen: the bars on the left, this week's lesson on the right. */
 .rc[data-mode='fullscreen'] {
   min-height: 100vh;
   border-radius: 0;
   border: 0;
-  padding: 26px 40px 24px;
+  padding: 22px 40px 20px;
 }
 @media (min-width: 900px) {
-  .rc[data-mode='fullscreen'] .rc-title,
+  .rc[data-mode='fullscreen'] .rc-heroLine {
+    font-size: 34px;
+  }
+  .rc[data-mode='fullscreen'] .rc-heroSub {
+    font-size: 21px;
+  }
   .rc[data-mode='fullscreen'] .rc-metaBig {
     font-size: 34px;
   }
   .rc[data-mode='fullscreen'] .rc-body {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
     gap: 40px;
-    align-items: center;
-    margin-top: 4px;
-  }
-  .rc[data-mode='fullscreen'] .rc-left {
-    margin: 0;
-  }
-  .rc[data-mode='fullscreen'] .rc-right {
-    margin-top: 0;
-  }
-  .rc[data-mode='fullscreen'] .rc-verdict {
-    padding-top: 0;
-    border-top: 0;
-  }
-  .rc[data-mode='fullscreen'] .rc-verdictText {
-    font-size: 27px;
-  }
-  /* Missions side by side, board on top, as in the scouting-report layout. */
-  .rc[data-mode='fullscreen'] .rc-missions {
-    margin-top: 18px;
-  }
-  .rc[data-mode='fullscreen'] .rc-missionList {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 12px;
-  }
-  .rc[data-mode='fullscreen'] .rc-mission {
-    grid-template-columns: minmax(0, 1fr);
     align-items: start;
-    align-content: start;
+  }
+  .rc[data-mode='fullscreen'] .rc-left,
+  .rc[data-mode='fullscreen'] .rc-right {
+    margin-top: 20px;
+  }
+  /* Tighter vertical rhythm so the whole card fits a 1200x800 frame. */
+  .rc[data-mode='fullscreen'] .rc-leakList {
     gap: 10px;
-    padding: 10px 10px 12px;
   }
-  .rc[data-mode='fullscreen'] .rc-mTitle {
-    font-size: 15.5px;
+  .rc[data-mode='fullscreen'] .rc-focus {
+    padding: 14px 16px 12px;
   }
-  .rc[data-mode='fullscreen'] .rc-mMeta,
-  .rc[data-mode='fullscreen'] .rc-mLoss {
-    font-size: 12px;
+  .rc[data-mode='fullscreen'] .rc-prompt {
+    margin-top: 10px;
   }
-  /* Narrow cards: "wrong in N of M games" gets its own line rather than breaking mid-phrase. */
-  .rc[data-mode='fullscreen'] .rc-sep {
-    display: none;
+  .rc[data-mode='fullscreen'] .rc-fixes {
+    margin-top: 14px;
   }
-  .rc[data-mode='fullscreen'] .rc-mCount {
-    display: block;
-  }
-  .rc[data-mode='fullscreen'] .rc-mCount::first-letter {
-    text-transform: uppercase;
+  .rc[data-mode='fullscreen'] .rc-cta {
+    margin-top: 14px;
   }
 }
 
-/* The list under the chart is for narrow frames only (see below). */
-.rc-areaList--narrow {
-  display: none;
-}
-
-/* Narrow frames: the chart's labels would collide, so the chart shows area names only and
-   the numbers and verdicts move to the list under it. */
-@media (max-width: 539px) {
-  .rc-radar .rc-axisNums,
-  .rc-radar .rc-chip {
-    display: none;
-  }
-  .rc-radar .rc-axisName {
-    font-size: 11.5px;
-  }
-  .rc-areaList--narrow {
-    display: block;
-    margin-top: 6px;
-  }
-  .rc-areaList--narrow .rc-axisName {
-    min-width: 0;
-    flex: 1 1 100%;
-  }
-}
+/* Narrow frames */
 @media (max-width: 480px) {
   .rc {
     padding: 18px 16px;
   }
-  .rc-title,
+  .rc-heroLine,
   .rc-metaBig {
-    font-size: 24px;
+    font-size: 23px;
   }
-  .rc-mission {
-    grid-template-columns: 84px minmax(0, 1fr);
+  .rc-heroSub {
+    font-size: 16px;
+  }
+  .rc-boards {
+    gap: 8px;
+  }
+  .rc-fix {
+    grid-template-columns: 80px minmax(0, 1fr);
     gap: 10px;
   }
 }
