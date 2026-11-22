@@ -255,6 +255,8 @@ export const MAX_QUICK_FIXES = 3;
 /** The weekly drill target (P1's LEAK_CFG.drillsPerWeek; config.ts can't be imported here). */
 export const DRILLS_PER_WEEK = 20;
 export const KEEP_THE_WIN_PROMPT = "You're winning here. Find the move that keeps it.";
+/** The prompt for every other lesson board: a better move, not "the" best one (right means within 5%). */
+export const PLAIN_PROMPT = 'Find a better move here.';
 const MAX_HERO_TEXT = 200;
 const MAX_LINE_TEXT = 200;
 const MAX_LABEL_TEXT = 80;
@@ -503,7 +505,8 @@ export function costlyMovesText(perGame: number): string {
  * when it is the top bar, "Your focus this week: X." when it isn't; then its share.
  */
 function heroFromLeak(leak: LeakReportLike['leaks'][number] | undefined, isTop: boolean): ReportHero {
-  if (!leak) return { headline: 'Not enough games yet to say where your points go.', sub: '' };
+  // No games, or nothing given away yet: no situation can be named.
+  if (!leak || !(leak.sharePct > 0)) return { headline: 'Not enough games yet to say where your points go.', sub: '' };
   const name = `${leak.label.charAt(0).toLowerCase()}${leak.label.slice(1)}`;
   return {
     headline: isTop ? `Your biggest leak: ${name}.` : `Your focus this week: ${name}.`,
@@ -608,13 +611,13 @@ function reportV4(r: LeakReportLike, x: ReportV4Extras): ReportView {
     hero = heroFromTimeLosses(r.timeLosses);
     title = 'Beat the clock';
     line = `${many(total)} where your clock was low and a move slipped.`;
-    prompt = "You're low on time here. Find a good move.";
+    prompt = PLAIN_PROMPT;
   } else {
     const leak = r.leaks.find((l) => l.key === f.key);
     hero = heroFromLeak(leak, ranked[0]?.key === f.key);
     title = leak?.label ?? 'This week';
     line = `${many(total)} where a move cost you${leak ? ` (${leak.label.toLowerCase()})` : ''}.`;
-    prompt = 'Find the best move here.';
+    prompt = PLAIN_PROMPT;
   }
 
   const positions: FocusPosition[] = (x.positions ?? [])
