@@ -36,9 +36,29 @@ describe('findRepeated', () => {
     expect(p.avgLossPts).toBeCloseTo(8, 10); // averaged over the wrong moves
     expect(p.movesFromStart).toEqual(['e4', 'e5']);
     expect(p.best).toBe('Nf3');
-    expect(p.usual[0]).toMatchObject({ move: 'Qh5', times: 2 });
-    expect(p.usual.map((u) => u.move)).toContain('Nf3');
+    expect(p.usual).toEqual([{ move: 'Qh5', times: 2, lossPts: 8 }]);
     expect([...p.gameIds].sort()).toEqual(['A', 'B', 'C']);
+  });
+
+  it('usualListsOnlyWrongMoves', () => {
+    // seen 6 times: the engine's move twice, a small slip once, and two different wrong moves
+    const games = [
+      game('A', ['e4', 'e5'], 'Nf3', 0),
+      game('B', ['e4', 'e5'], 'Nf3', 0),
+      game('C', ['e4', 'e5'], 'd3', 4), // loses less than 5 points: accepted, never listed
+      game('D', ['e4', 'e5'], 'Qh5', 8),
+      game('E', ['e4', 'e5'], 'Bc4', 12),
+      game('F', ['e4', 'e5'], 'Bc4', 12),
+    ];
+    const [p] = findRepeated(games);
+    expect(p).toMatchObject({ seen: 6, wrong: 3, best: 'Nf3' });
+    expect(p.usual).toEqual([
+      { move: 'Bc4', times: 2, lossPts: 12 },
+      { move: 'Qh5', times: 1, lossPts: 8 },
+    ]);
+    const listed = p.usual.map((u) => u.move);
+    expect(listed).not.toContain(p.best);
+    expect(listed).not.toContain('d3');
   });
 
   it('ignores small losses and the opponent’s moves', () => {
