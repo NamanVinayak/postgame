@@ -1,5 +1,5 @@
 /**
- * The four things the board widget can show, and pure mappers that build them from the
+ * The things the board widget can show, and pure mappers that build them from the
  * coach's data. Every tool linked to BOARD_URI returns one CoachView as `structuredContent`;
  * the widget switches on `kind`.
  *
@@ -10,7 +10,7 @@
  */
 import type { Color } from '../../../src/types';
 import type { PositionFacts } from '../coaching/positionFacts';
-import type { ExampleSource } from '../diagnosis/examples';
+import type { ExampleRow, ExampleSource, ExamplesPage } from '../diagnosis/examples';
 import type { LeakKey } from '../diagnosis/leaks';
 import type { BoardView } from './boardResource';
 
@@ -54,7 +54,7 @@ export interface ReportHero {
 export interface ReportLeak {
   /** Plain name, e.g. "Balanced middlegames". */
   label: string;
-  /** Share of all the win chance the player gave away that went here, whole %. */
+  /** Share of all the winning chances the player gave away that went here, whole %. */
   sharePct: number;
   /** Where that share likely lies (from resampling whole games), whole %. */
   range: [number, number];
@@ -148,11 +148,20 @@ export interface StatusView {
   progress?: StatusProgress;
 }
 
+/**
+ * One page of the games behind a finding (coach_examples' structuredContent, plan Task P5): each
+ * row has the date, the opponent's rating, the result, the move where it slipped with the quick
+ * check's win % before and after, the win % curve, and the board before the move. No answers.
+ */
+export type ExamplesView = ExamplesPage;
+export type ExampleRowView = ExampleRow;
+
 export type CoachView =
   | ({ kind: 'answer' } & BoardView)
   | { kind: 'question'; fen: string; orientation: Color; gameId: string; ply: number; prompt: string }
   | ReportView
-  | StatusView;
+  | StatusView
+  | ExamplesView;
 
 /**
  * The fields of P1's `LeakReport` that the v4 card reads, declared structurally so this file
@@ -363,7 +372,7 @@ function heroFromLeak(leak: LeakReportLike['leaks'][number] | undefined, isTop: 
   const name = `${leak.label.charAt(0).toLowerCase()}${leak.label.slice(1)}`;
   return {
     headline: isTop ? `Your biggest leak: ${name}.` : `Your focus this week: ${name}.`,
-    sub: `${Math.round(leak.sharePct)}% of the win chance you give away happens here.`,
+    sub: `${Math.round(leak.sharePct)}% of the winning chances you give away happen here.`,
   };
 }
 
@@ -738,13 +747,132 @@ function isStatus(v: Obj): boolean {
   return isStatusText(v.title) && isStatusText(v.message) && (v.progress === undefined || isProgress(v.progress));
 }
 
+// ---- The examples page (coach_examples) ----
+
+/** At most this many rows on a page, and points in a row's win % curve (diagnosis/examples' limits). */
+export const MAX_EXAMPLES_PER_PAGE = 10;
+const MAX_TIMELINE_POINTS = 80;
+const MAX_EXAMPLES_TITLE = 120;
+const MAX_GAME_ID = 200;
+/** The only game links the panel opens: Chess.com, over https. */
+const CHESS_COM_URL = /^https:\/\/(?:www\.)?chess\.com\/[^\s]*$/;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * A field name that could carry an answer: a best move, an answer, a refutation, an engine
+ * line. `timeline` (the win % curve) is the one legitimate name with "line" in it.
+ */
+const isAnswerName = (k: string) => k !== 'timeline' && /best|answer|refut|line|^pv/i.test(k);
+
+/** True when some key, at any depth, is named like an answer. */
+function hasAnswerField(x: unknown, depth = 0): boolean {
+  if (depth > 6 || typeof x !== 'object' || x === null) return false;
+  if (Array.isArray(x)) return x.some((v) => hasAnswerField(v, depth + 1));
+  return Object.entries(x).some(([k, v]) => isAnswerName(k) || hasAnswerField(v, depth + 1));
+}
+
+const isWhole = (x: unknown, lo: number, hi: number): x is number => isNum(x) && Number.isInteger(x) && x >= lo && x <= hi;
+
+function isExampleRow(r: unknown): r is ExampleRow {
+  if (!isObj(r)) return false;
+  const t = r.timeline;
+  return (
+    isText(r.gameId, MAX_GAME_ID) &&
+    r.gameId.length > 0 &&
+    (r.gameUrl === null || isStr(r.gameUrl)) &&
+    isStr(r.date) &&
+    ISO_DATE.test(r.date) &&
+    (r.opponentRating === null || isWhole(r.opponentRating, 0, 4000)) &&
+    (r.result === 'win' || r.result === 'draw' || r.result === 'loss') &&
+    isColor(r.myColor) &&
+    isWhole(r.slipPly, 0, 2000) &&
+    isWhole(r.slipMoveNo, 1, 1000) &&
+    isFen(r.fenBefore) &&
+    isStr(r.playedSan) &&
+    SAN.test(r.playedSan) &&
+    isStr(r.playedUci) &&
+    UCI.test(r.playedUci) &&
+    isPct(r.quickWinBefore) &&
+    isPct(r.quickWinAfter) &&
+    Array.isArray(t) &&
+    t.length >= 1 &&
+    t.length <= MAX_TIMELINE_POINTS &&
+    t.every(isPct) &&
+    isWhole(r.slipIndex, 0, t.length - 1)
+  );
+}
+
+/** A row rebuilt from the contract's fields only; a game link that isn't Chess.com becomes null. */
+function cleanExampleRow(r: ExampleRow): ExampleRow {
+  return {
+    gameId: r.gameId,
+    gameUrl: r.gameUrl !== null && CHESS_COM_URL.test(r.gameUrl) ? r.gameUrl : null,
+    date: r.date,
+    opponentRating: r.opponentRating,
+    result: r.result,
+    myColor: r.myColor,
+    slipPly: r.slipPly,
+    slipMoveNo: r.slipMoveNo,
+    fenBefore: r.fenBefore,
+    playedSan: r.playedSan,
+    playedUci: r.playedUci,
+    quickWinBefore: r.quickWinBefore,
+    quickWinAfter: r.quickWinAfter,
+    timeline: [...r.timeline],
+    slipIndex: r.slipIndex,
+  };
+}
+
+/**
+ * Checks coach_examples' structuredContent and returns a clean copy, or null. Strict: every row
+ * must be well formed (a board that reads, a real move, win % in 0–100, the slip inside its
+ * curve), the page must add up (no more rows than its limit or than the total), and a quick fix
+ * page carries its key. Any field named like an answer (best…, answer, line, refutation), at any
+ * depth, refuses the whole page; other unknown fields are dropped from the copy.
+ */
+export function parseExamplesView(x: unknown): ExamplesView | null {
+  if (!isObj(x) || x.kind !== 'examples' || hasAnswerField(x)) return null;
+  const rows = x.examples;
+  const ok =
+    isExampleSource(x.source) &&
+    (x.key === undefined || (isText(x.key, MAX_KEY_TEXT) && x.key.length > 0)) &&
+    (x.source !== 'quickFix' || x.key !== undefined) &&
+    isText(x.title, MAX_EXAMPLES_TITLE) &&
+    x.title.length > 0 &&
+    isCount(x.total) &&
+    isCount(x.offset) &&
+    isWhole(x.limit, 1, MAX_EXAMPLES_PER_PAGE) &&
+    x.numbersLabel === 'quick check' &&
+    Array.isArray(rows) &&
+    rows.length <= x.limit &&
+    // Past the end a page is empty (the server allows any offset); otherwise its rows fit the total.
+    (rows.length === 0 || x.offset + rows.length <= x.total) &&
+    rows.every(isExampleRow);
+  if (!ok) return null;
+  const v = x as unknown as ExamplesView;
+  const out: ExamplesView = {
+    kind: 'examples',
+    source: v.source,
+    title: v.title,
+    total: v.total,
+    offset: v.offset,
+    limit: v.limit,
+    numbersLabel: 'quick check',
+    examples: v.examples.map(cleanExampleRow),
+  };
+  if (v.key !== undefined) out.key = v.key;
+  return out;
+}
+
 /**
  * Checks a tool result's `structuredContent`; returns null unless it is a well-formed CoachView.
- * A report comes back as a clean copy holding only known fields (cleanReportV4).
+ * A report and an examples page come back as clean copies holding only known fields
+ * (cleanReportV4, parseExamplesView).
  */
 export function parseCoachView(x: unknown): CoachView | null {
   if (!isObj(x)) return null;
   if (x.kind === 'report') return isReportV4(x) ? cleanReportV4(x as unknown as ReportView) : null;
+  if (x.kind === 'examples') return parseExamplesView(x);
   const ok =
     (x.kind === 'answer' && isAnswer(x)) ||
     (x.kind === 'question' && isQuestion(x)) ||
