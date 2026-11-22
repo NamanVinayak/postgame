@@ -8,6 +8,7 @@
     "test:engine": "vitest run --project engine --passWithNoTests",
     "server": "tsx src/server/server.ts",
     "prewarm": "tsx scripts/prewarm.ts",
+    "diagnose": "tsx scripts/diagnose-cli.ts",
     "build:widgets": "vite build --config widgets/vite.config.ts"
   },
   "devDependencies": {
