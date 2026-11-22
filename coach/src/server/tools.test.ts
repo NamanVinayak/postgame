@@ -498,7 +498,9 @@ describe('coach_engine_status', () => {
     const client = await connect(deps(createRunner(NO_ENGINE, source([]))));
     const res = await call(client, 'coach_engine_status', {});
     expect(res.structuredContent).toMatchObject({ stockfishPath: '/fake/stockfish', binaryFound: true });
-    expect(res.structuredContent?.display).toMatchObject({ movetimeMs: 1500, multiPv: 3 });
+    expect(res.structuredContent?.display).toMatchObject({ depth: 16, threads: 1, multiPv: 3 });
+    expect(textOf(res)).toContain('depth 16, 1 thread, MultiPV 3');
+    expect(textOf(res)).not.toMatch(/1500 ms per position/);
     expect(textOf(res)).toContain('/fake/stockfish');
   });
 });

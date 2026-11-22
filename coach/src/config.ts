@@ -33,8 +33,9 @@ export const STATS_CFG = {
 // next): one thread, a fixed hash cleared before each search (ucinewgame), and a fixed depth.
 // Depth 16 on an M4 Pro (Stockfish 19, MultiPV 3, one thread) took 1.1, 1.5 and 1.2 s on three
 // middlegames (depth 17: 1.7, 2.0 and 1.6 s; depth 18: 2.5, 3.4 and 1.8 s).
+// capMs: a safety time cap on each search (rarely hit); a search it cuts short is shown but never stored.
 // movetimeMs does not limit this search; it is only the nominal budget callers pass to Engine.evaluate.
-export const DISPLAY_CFG = { depth: 16, threads: 1, hashMb: 64, multiPv: 3, movetimeMs: 1500 };
+export const DISPLAY_CFG = { depth: 16, threads: 1, hashMb: 64, multiPv: 3, capMs: 10_000, movetimeMs: 1500 };
 // When a repeated position counts as a real recurring mistake.
 export const REPEAT_CFG = { minSeen: 3, minWrong: 2, wrongLossPts: 5, minAvgLossPts: 6 };
 // How many new games must arrive before a past diagnosis is re-checked.
