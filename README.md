@@ -1,5 +1,12 @@
 # Postgame — Free Chess Game Review
 
+[![Tests and deploy](https://github.com/NamanVinayak/postgame/actions/workflows/deploy.yml/badge.svg)](https://github.com/NamanVinayak/postgame/actions/workflows/deploy.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![170 unit tests](https://img.shields.io/badge/unit%20tests-170-brightgreen.svg)
+
+**Try it:** <https://namanvinayak.github.io/postgame/> · **Roadmap:** [ROADMAP.md](ROADMAP.md) ·
+**For AI agents:** [AGENTS.md](AGENTS.md)
+
 A free, mobile-first web app that reviews the games you play on **Chess.com** —
 accuracy, mistakes, blunders, missed wins, the better move you should have
 played, and an evaluation graph — without a paid subscription.
@@ -97,6 +104,7 @@ src/
   services/storage.ts         localStorage username + IndexedDB analysis cache
   services/engine/            Stockfish Web Worker engine + UCI line parsing
   analysis/                   win% · classification · accuracy · reasons · analyzeGame · lines
+  training/                   coach packs · spaced-repetition scheduler · drill sessions
   hooks/                      connected user, recent games
   components/                 Connect / GameList / Review screens (+ line explorer)
 docs/superpowers/             Design spec and implementation plan
