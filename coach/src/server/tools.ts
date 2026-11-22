@@ -22,16 +22,23 @@ import { readCached, type CachedGame } from '../analysis/cache';
 import type { JobStatus, Query, Runner } from '../analysis/runner';
 import { deepDisagrees, deepPositionFacts, examplePositions, repeatedRefs, type PositionFacts } from '../coaching/explain';
 import {
+  boardKeyFinder,
   checkMove,
   firstTeachable,
   isTeachable,
+  legalAttempt,
   practiceExclusions,
   refKey,
   samePatternPositions,
+  triedBoard,
   type CheckResult,
+  type PracticeKind,
 } from '../coaching/lesson';
+import { buildReportPositions } from '../coaching/reportPositions';
 import {
   addThinkingNote,
+  firstTries,
+  isUsername,
   lastSessionSummary,
   loadStudent,
   recordAttempt,
@@ -43,10 +50,10 @@ import {
 import { ENGINE_CFG, DISPLAY_CFG, POSTGAME_URL, REPEAT_CFG, SOURCE_CFG, STATS_CFG } from '../config';
 import { AREA_NAMES, gamePlies } from '../diagnosis/areas';
 import { diagnose, type AreaFinding, type Diagnosis } from '../diagnosis/diagnose';
-import type { RepeatedPosition } from '../diagnosis/repeated';
+import { positionKey, type RepeatedPosition } from '../diagnosis/repeated';
 import { guardDisplayEngine, memoDisplayEngine, type DisplayEngine, type SearchMemo } from '../engine/displayEngine';
 import { BOARD_URI } from './boardResource';
-import { toAnswerView, toQuestionView, toReportView } from './views';
+import { DEFAULT_REPORT_CTA, toAnswerView, toQuestionView, toReportView, type ReportPosition } from './views';
 
 /** Holds the one display engine (from `createDisplayEngine`), created on first use. */
 export interface DisplaySlot {
@@ -78,6 +85,8 @@ export interface CoachDeps {
   searchTimeoutMs?: number;
   /** The diagnosis itself (tests count calls); default `diagnose`. */
   diagnose?: typeof diagnose;
+  /** The clock for student sessions (tests move it forward); default `Date.now`. */
+  now?: () => number;
 }
 
 const EXAMPLES = 3;
@@ -302,8 +311,14 @@ const RESTATES_FOCUS = /^(Focus:|No focus yet)/;
  * their rating %, game count), one focus line, the notes, the repeated positions (game moves
  * and approximate losses, each with a reference to open it) and example positions by reference.
  * Rows without enough data show no percentages.
+ *
+ * With `practice` (a coaching session is running), the repeated positions are today's practice
+ * positions: they are listed without the player's moves there and without references, and the
+ * example positions are left out, so nothing in the text gives away an answer before the
+ * player tries (coach_ask_position asks them).
  */
-export function diagnosisText(v: DiagnosisView): string {
+export function diagnosisText(v: DiagnosisView, opts: { practice?: boolean } = {}): string {
+  const practice = opts.practice ?? false;
   const lines: string[] = [];
   lines.push(
     `Diagnosis for ${v.usernames.join(', ')}: ${plural(v.games, `${v.timeClass} game`)}. Each row compares the share of ` +
@@ -347,8 +362,11 @@ export function diagnosisText(v: DiagnosisView): string {
   if (v.repeated.length > 0) {
     lines.push(
       '',
-      'Positions you keep getting wrong (your moves from the games; losses are approximate, from the quick check; ' +
-        'open one with coach_explain_position before naming its best move):',
+      practice
+        ? "Positions you keep getting wrong (losses are approximate, from the quick check). These are today's practice " +
+            "positions; coach_ask_position asks them, so don't name or show any move in them before the player has tried:"
+        : 'Positions you keep getting wrong (your moves from the games; losses are approximate, from the quick check; ' +
+            'open one with coach_explain_position before naming its best move):',
     );
     const focusKeys = new Set(focus?.kind === 'repeated' ? focus.keys : []);
     v.repeated.slice(0, MAX_REPEATED_LINES).forEach((r, i) => {
@@ -363,15 +381,15 @@ export function diagnosisText(v: DiagnosisView): string {
       lines.push(
         `${i + 1}. ${focusKeys.has(r.key) ? '[focus] ' : ''}${where}: you had to move here in ${plural(r.seen, 'game')} ` +
           `and went wrong ${plural(r.wrong, 'time')}, losing about ${Math.round(r.approxAvgLossPts)}% win chance each time (quick check).` +
-          `${usual ? ` Your moves there: ${usual}.` : ''}` +
-          `${r.example ? ` To show it: gameId ${r.example.gameId}, ply ${r.example.ply}.` : ''}`,
+          `${usual && !practice ? ` Your moves there: ${usual}.` : ''}` +
+          `${r.example && !practice ? ` To show it: gameId ${r.example.gameId}, ply ${r.example.ply}.` : ''}`,
       );
     });
     const more = v.repeated.length - MAX_REPEATED_LINES;
     if (more > 0) lines.push(`…and ${plural(more, 'more position')} like these, in the structured data.`);
   }
 
-  if (v.examples.length > 0) {
+  if (v.examples.length > 0 && !practice) {
     lines.push('', 'Example positions for the focus (show one with coach_explain_position, using its gameId and ply):');
     for (const x of v.examples) {
       lines.push(
@@ -381,6 +399,15 @@ export function diagnosisText(v: DiagnosisView): string {
     }
   }
   return lines.join('\n');
+}
+
+/**
+ * The diagnosis as returned while a coaching session runs: the same, minus everything that would
+ * answer a practice position before the player tries it (the moves played in the repeated
+ * positions, their references and the example positions).
+ */
+export function practiceView(v: DiagnosisView): DiagnosisView {
+  return { ...v, repeated: v.repeated.map((r) => ({ ...r, usual: [], example: null })), examples: [] };
 }
 
 function progressText(done: number, total: number, skipped: number): string {
@@ -438,16 +465,48 @@ export function focusLabel(d: Diagnosis): string | null {
   return null;
 }
 
-/** The report card's headline when the coach gives none: the focus, with the game count. */
-export function defaultHeadline(d: Diagnosis): string {
+/** Areas as the report headline names them. */
+const HEADLINE_AREA: Record<string, string> = {
+  opening: 'your openings',
+  middlegame: 'your middlegames',
+  endgame: 'your endgames',
+  converting: 'finishing off won positions',
+  defending: 'holding worse positions',
+  timePressure: 'moves when your clock is low',
+};
+
+/**
+ * The report card's headline and the sentence under it, in plain words from the diagnosis,
+ * with the game count. `missions` is how many focus positions the card shows.
+ * - A clear gap (the focus area): it is named; under STATS_CFG.meaningfulGapPts it is "small but real".
+ * - No gap but enough games: "Your rating is honest", and the positions where points leak.
+ * - Too few games to judge any area: says so.
+ */
+export function reportWords(d: Diagnosis, missions: number): { headline: string; subhead: string } {
   const games = plural(d.games, `${d.timeClass} game`);
   const f = d.focus;
-  if (f?.kind === 'area') return `From ${games}: your clearest weak spot is ${AREA_NAMES[f.area]}.`;
-  if (f?.kind === 'repeated') {
-    const what = f.keys.length === 1 ? 'a position you keep getting wrong' : `${f.keys.length} positions you keep getting wrong`;
-    return `From ${games}: the thing to fix first is ${what}.`;
+  const gap = f?.kind === 'area' ? d.areas.find((a) => a.area === f.area && a.label === 'gap') : undefined;
+  if (gap) {
+    const name = HEADLINE_AREA[gap.area] ?? AREA_NAMES[gap.area];
+    return {
+      headline:
+        gap.gapPts < STATS_CFG.meaningfulGapPts ? `A small but real weak spot: ${name}.` : `Your weak spot: ${name}.`,
+      subhead:
+        `There, ${pct1(gap.myRate)}% of your moves are serious mistakes, against ${pct1(gap.oppRate)}% for players ` +
+        `at your rating (${games}).`,
+    };
   }
-  return `From ${games}: nothing stands out yet as a clear weak spot.`;
+  if (d.areas.length > 0 && d.areas.every((a) => a.label === 'notEnoughData')) {
+    return {
+      headline: 'Not enough games yet to judge.',
+      subhead: `${capitalize(games)} so far; each part of the game needs at least ${STATS_CFG.minGames} games.`,
+    };
+  }
+  return {
+    headline:
+      missions > 0 ? `Your rating is honest. Your points leak from ${plural(missions, 'position')}.` : 'Your rating is honest.',
+    subhead: `Against players at your rating, no part of your game stands out (${games}).`,
+  };
 }
 
 /**
@@ -469,7 +528,8 @@ export function checkText(r: Extract<CheckResult, { legal: true }>, tally: strin
   const f = r.facts;
   const side = capitalize(f.mover);
   const tried = r.attempt.moveSan;
-  const loss = Math.round(r.lossPts);
+  // Near the line, one decimal, so "loses about 5%" never sits next to "right means at most 5%".
+  const loss = !r.correct && r.lossPts < REPEAT_CFG.wrongLossPts + 0.5 ? r.lossPts.toFixed(1) : String(Math.round(r.lossPts));
   const bestSan = f.bestSan ?? f.playedSan;
   const bestUci = f.bestUci ?? f.playedUci;
   const lines = [
@@ -530,10 +590,11 @@ export function coachMeText(username: string): string {
     'The session:',
     '1. Report card. Call coach_start_analysis, then coach_diagnosis until it is done (while games are still being ' +
       'analysed, tell me how far it got and check again shortly). Then call coach_report; the board shows the report card. ' +
-      "Add a one- or two-sentence headline of your own, nothing more; give the table in text only if the board didn't show.",
-    '2. Warm-up. Call coach_student. If I had an earlier session, tell me its line ("Last time: …, 4 of 7 right") and ' +
-      'ask its warm-up position again with coach_ask_position (that gameId and ply), the same way as step 4. ' +
-      'If this is my first session, skip this step.',
+      "Add a one- or two-sentence headline of your own, nothing more; give the table in text only if the board didn't show. " +
+      "The card's positions are today's practice: don't name their moves.",
+    '2. Warm-up. Call coach_student. If I had an earlier session, first ask its warm-up position again with ' +
+      'coach_ask_position (that gameId and ply), the same way as step 4. Only after my try, tell me the line from last time ' +
+      '("Last time: …, 4 of 7 right") and the thinking errors noted then. If this is my first session, skip this step.',
     "3. Today's theme: the one focus from the report, with my own numbers (my %, players at my rating %, and the number of games).",
     '4. A guided position, where I try first:',
     '   - Call coach_ask_position without a gameId. It picks a position from my games with the focus pattern, checks it ' +
@@ -546,7 +607,9 @@ export function coachMeText(username: string): string {
       'my reason, not just the move (for example "you didn\'t ask what their last move threatened"), and save it with ' +
       "coach_note_thinking. Then show the refutation, from the tool's lines.",
     '5. Practice: three to five more positions of the same pattern, each with coach_ask_position (no gameId) and the same ' +
-      'try-first loop. After a few, point out what the positions have in common.',
+      'try-first loop. After a few, point out what the positions have in common. If coach_ask_position says there are ' +
+      'no more positions, or that it is enough for today, stop there and tell me honestly how many we did; a short ' +
+      "session is fine. Don't make positions up.",
     '6. One rule of thumb for my live games, in one sentence, drawn from the thinking errors you saw. Save it with ' +
       'coach_note_thinking (rule).',
     `7. Homework: about 30 more games in the same time class before the next session, and practice of this focus on my ` +
@@ -557,6 +620,7 @@ export function coachMeText(username: string): string {
     'Rules:',
     '- Never reveal the answer before I try: no best move, no evaluation and no hint that points at a move until ' +
       'coach_check_move has scored my try. If I ask for a hint, ask a thinking question instead ("what changed after their last move?").',
+    "- Never open a practice position with coach_explain_position before I've tried it.",
     '- After the answer, name the thinking error first, then show the refutation.',
     '- Three to five positions of the same pattern.',
     '- One rule of thumb per session.',
@@ -583,20 +647,47 @@ function uniqueGames(lists: CachedGame[][]): CachedGame[] {
 
 // ---- registration ----
 
-/** What the server remembers about one player's lesson in this session. */
+/**
+ * What the board shows instead of a report while games are still being analysed. The board
+ * widget gets its own `status` view; this is the same shape.
+ */
+export interface StatusView {
+  kind: 'status';
+  title: string;
+  message: string;
+  progress: { done: number; total: number };
+}
+
+/** What the server remembers about one player's lesson. */
 interface Lesson {
   /** Lowercased primary username: names the student file. */
   player: string;
+  /** Every account of this player, lowercased (the primary one too). */
+  accounts: Set<string>;
   d: Diagnosis;
   games: CachedGame[];
   focus: string | null;
-  /** Positions already asked (or cleared by the deep check) this session, as refKeys. */
+  /** The student session (`OpenSession.tag`) that `asked` and `picked` belong to. */
+  askedTag: number;
+  /** Positions asked in this student session, as refKeys. Starts empty in each new session. */
   asked: Set<string>;
+  /** Practice positions picked in this student session (the guided one and the practice ones). */
+  picked: number;
+  /** Positions the deep check cleared: never worth asking, whatever the session. */
+  cleared: Set<string>;
+}
+
+/** A student session as this server sees it; `index` is its place in the student file once something is written. */
+interface OpenSession {
+  tag: number;
+  index: number | null;
+  lastAt: number;
 }
 
 type DiagnosisOutcome =
-  | { ready: false; result: Result; waiting: boolean }
-  | { ready: true; d: Diagnosis; view: DiagnosisView; text: string; games: CachedGame[]; qs: Query[]; skipped: number };
+  | { ready: false; waiting: false; result: Result }
+  | { ready: false; waiting: true; result: Result; done: number; total: number }
+  | { ready: true; d: Diagnosis; view: DiagnosisView; games: CachedGame[]; qs: Query[]; skipped: number; player: string };
 
 const optionalUsername = z
   .string()
@@ -605,19 +696,24 @@ const optionalUsername = z
   .optional()
   .describe("The player's primary Chess.com username (names the student file). Leave out to use this session's player.");
 
+/** Positions picked per session without a gameId: about one guided position and five practice ones. */
+const SESSION_POSITIONS = 6;
+
 export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
   const listWaitMs = deps.listWaitMs ?? 1500;
   const startWaitMs = deps.startWaitMs ?? 20_000;
   const searchTimeoutMs = deps.searchTimeoutMs ?? 30_000;
   const diagnoseFn = deps.diagnose ?? diagnose;
-  const memo = new Map<string, { d: Diagnosis; view: DiagnosisView; text: string }>();
+  const now = deps.now ?? Date.now;
+  const memo = new Map<string, { d: Diagnosis; view: DiagnosisView }>();
   /** Every deep search of this session, so a position always gets the same answer. */
   const searches: SearchMemo = new Map();
   const lessons = new Map<string, Lesson>();
-  /** The player of the last diagnosis or report: the default for the coaching tools. */
+  /** The player of the last diagnosis or report (or the last name given): the default for the coaching tools. */
   let currentPlayer: string | null = null;
-  /** The student-file session each player is writing to in this server session. */
-  const openSessions = new Map<string, { index: number; lastAt: number }>();
+  /** The student session each player is in, as this server sees it. */
+  const sessions = new Map<string, OpenSession>();
+  let nextTag = 1;
 
   /** The display engine with a time limit per search and this session's search memo. */
   function deepEngine(): DisplayEngine {
@@ -671,7 +767,7 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
    */
   async function diagnosisFor(args: QueryArgs): Promise<DiagnosisOutcome> {
     const qs = toQueries(args);
-    if (typeof qs === 'string') return { ready: false, result: failure(qs), waiting: false };
+    if (typeof qs === 'string') return { ready: false, waiting: false, result: failure(qs) };
     const ts = qs.map((q) => track(q, false));
     const broken = ts.find((t) => t.error !== undefined);
     if (broken) {
@@ -686,7 +782,13 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
       return { ready: false, waiting: false, result: failure(`Could not get the game list from Chess.com: ${msg(e)}. Call again to retry.`) };
     }
     if (!r) {
-      return { ready: false, waiting: true, result: reply('Getting the game lists from Chess.com. Ask again in a moment.', { state: 'fetching' }) };
+      return {
+        ready: false,
+        waiting: true,
+        done: 0,
+        total: 0,
+        result: reply('Getting the game lists from Chess.com. Ask again in a moment.', { state: 'fetching' }),
+      };
     }
 
     const jobIds = r.value.map((st) => st.jobId);
@@ -701,7 +803,13 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
     if (statuses.some((st) => st.state === 'running')) {
       const done = sum((st) => st.done);
       const total = sum((st) => st.total);
-      return { ready: false, waiting: true, result: reply(progressText(done, total, skipped), { state: 'running', jobIds, done, total, skipped }) };
+      return {
+        ready: false,
+        waiting: true,
+        done,
+        total,
+        result: reply(progressText(done, total, skipped), { state: 'running', jobIds, done, total, skipped }),
+      };
     }
 
     // Reading the cache is fast; the diagnosis itself is not (about 1.7 s for 900 games), so the
@@ -723,45 +831,101 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
               return { username: q.usernames.join(', '), games: n };
             })
           : [];
-      const view = diagnosisView(d, examples, repeatedRefs(d, games), byAccount);
-      found = { d, view, text: diagnosisText(view) };
+      found = { d, view: diagnosisView(d, examples, repeatedRefs(d, games), byAccount) };
       memo.set(memoKey, found);
       if (memo.size > MEMO_SIZE) memo.delete(memo.keys().next().value as string);
     }
 
     const player = qs[0].usernames[0].toLowerCase();
-    lessons.set(player, { player, d: found.d, games, focus: focusLabel(found.d), asked: lessons.get(player)?.asked ?? new Set() });
+    const prev = lessons.get(player);
+    lessons.set(player, {
+      player,
+      accounts: new Set(qs.flatMap((q) => q.usernames.map((u) => u.toLowerCase()))),
+      d: found.d,
+      games,
+      focus: focusLabel(found.d),
+      askedTag: prev?.askedTag ?? 0,
+      asked: prev?.asked ?? new Set(),
+      picked: prev?.picked ?? 0,
+      cleared: prev?.cleared ?? new Set(),
+    });
     currentPlayer = player;
-    return { ready: true, d: found.d, view: found.view, text: found.text, games, qs, skipped };
+    return { ready: true, d: found.d, view: found.view, games, qs, skipped, player };
+  }
+
+  /** The primary account for a name: one of a lesson's other accounts maps to that lesson's player. */
+  function primaryOf(name: string): string {
+    const n = name.toLowerCase();
+    for (const l of lessons.values()) if (l.accounts.has(n)) return l.player;
+    return n;
   }
 
   /**
-   * The player a coaching tool is about: the argument (which then becomes this session's
-   * player), else this session's player, else the game's account.
+   * The player a coaching tool is about, as the primary account's lowercased name (it names the
+   * student file). A name given is checked first (a bad one throws) and becomes this session's
+   * player, mapped to its primary account; else this session's player; else the game's account,
+   * mapped the same way.
    */
   function playerFor(username: string | undefined, c?: CachedGame): string | null {
-    if (username) return (currentPlayer = username.toLowerCase());
-    return currentPlayer ?? c?.game.username.toLowerCase() ?? null;
-  }
-
-  /** Index of the student-file session open in this server session, if it is still the file's last one. */
-  function openIndex(player: string, s: StudentFile): number | null {
-    const open = openSessions.get(player);
-    if (!open || Date.now() - open.lastAt > SESSION_IDLE_MS || open.index !== s.sessions.length - 1) return null;
-    return open.index;
+    if (username !== undefined) {
+      if (!isUsername(username)) throw new Error(`"${username}" is not a Chess.com username`);
+      return (currentPlayer = primaryOf(username));
+    }
+    return currentPlayer ?? (c ? primaryOf(c.game.username) : null);
   }
 
   /**
-   * Loads, edits and saves the player's student file. The first write of this server session
-   * (or after SESSION_IDLE_MS) opens a new session, with the lesson's focus.
+   * The player's student session, kept alive by this call. A new one starts when there is none
+   * in this server yet, or after SESSION_IDLE_MS without any coaching tool for this player.
+   */
+  function touchSession(player: string): OpenSession {
+    const t = now();
+    let cur = sessions.get(player);
+    if (!cur || t - cur.lastAt > SESSION_IDLE_MS) {
+      cur = { tag: nextTag++, index: null, lastAt: t };
+      sessions.set(player, cur);
+    }
+    cur.lastAt = t;
+    return cur;
+  }
+
+  /** The running session's index in the student file, or null when nothing is written in it yet (or it has ended). */
+  function openIndex(player: string, s: StudentFile): number | null {
+    const cur = sessions.get(player);
+    if (!cur || now() - cur.lastAt > SESSION_IDLE_MS || cur.index === null || cur.index !== s.sessions.length - 1) return null;
+    return cur.index;
+  }
+
+  /** The lesson's session state, emptied when the student session has rolled over. */
+  function lessonSession(lesson: Lesson): void {
+    const cur = touchSession(lesson.player);
+    if (lesson.askedTag !== cur.tag) {
+      lesson.askedTag = cur.tag;
+      lesson.asked = new Set();
+      lesson.picked = 0;
+    }
+  }
+
+  /**
+   * Loads, edits and saves the player's student file. The first write of a student session
+   * opens a new session in the file, with the lesson's focus.
    */
   function editStudent(player: string, edit: (s: StudentFile) => StudentFile): StudentFile {
+    const cur = touchSession(player);
     let s = loadStudent(player);
-    if (openIndex(player, s) === null) s = startSession(s, lessons.get(player)?.focus ?? null);
+    if (cur.index === null || cur.index !== s.sessions.length - 1) s = startSession(s, lessons.get(player)?.focus ?? null, now());
     s = edit(s);
     saveStudent(s);
-    openSessions.set(player, { index: s.sessions.length - 1, lastAt: Date.now() });
+    cur.index = s.sessions.length - 1;
     return s;
+  }
+
+  function studentOrNothing(player: string): StudentFile | undefined {
+    try {
+      return loadStudent(player);
+    } catch {
+      return undefined;
+    }
   }
 
   /** A cached game and one of the player's own plies in it, or the reason it can't be used. */
@@ -795,8 +959,8 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
         "Shows one of the player's own moves from an analysed game on a chess board: the move played (red arrow), " +
         "Stockfish's best move (green arrow) and best line, the opponent's strongest reply, and the win chance before " +
         'and after. Stockfish first re-checks the position with a deeper search, so this takes a few seconds. ' +
-        'Use a gameId and ply from coach_diagnosis. Call this before naming the best move in any position. ' +
-        'Not for a position the player is about to try (coach_ask_position): it shows the answer. ' +
+        'Use it for a position the player has already tried (coach_check_move), or one that is not a practice position. ' +
+        'Never for a practice position the player has not tried yet: it shows the answer. ' +
         NO_INVENTED_FACTS,
       inputSchema: {
         gameId: z.string().min(1).describe('Game id from coach_diagnosis (the Chess.com game URL)'),
@@ -894,9 +1058,11 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
     async (args) => {
       const o = await diagnosisFor(args);
       if (!o.ready) return o.result;
-      let text = o.text;
+      // A coaching session is running from here on: nothing in it may answer a practice position.
+      const view = practiceView(o.view);
+      let text = diagnosisText(view, { practice: true });
       if (o.skipped) text += `\n\n${plural(o.skipped, 'game')} could not be read and ${o.skipped === 1 ? 'was' : 'were'} left out.`;
-      return reply(text, { ...o.view });
+      return reply(text, { ...view });
     },
   );
 
@@ -907,9 +1073,10 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
       title: 'Show the report card',
       description:
         "Shows the player's report card on the board: up to six areas in plain words, their serious-mistake rate against " +
-        'players at their rating, the game count and the focus. Call it once coach_diagnosis is done, with the same ' +
-        'arguments; while games are still being analysed it says so and shows nothing. Also returns the table as text ' +
-        '(show that only if the board did not appear). Afterwards, practice positions come from coach_ask_position. ' +
+        "players at their rating, the game count, the focus and up to three positions to train this week. Call it once " +
+        'coach_diagnosis is done, with the same arguments; while games are still being analysed the board says so. ' +
+        'Checking the positions takes a few seconds. Also returns the table as text (show that only if the board did ' +
+        "not appear). The positions are today's practice: coach_ask_position asks them; never name their moves first. " +
         NO_INVENTED_FACTS,
       inputSchema: {
         usernames: usernamesSchema,
@@ -931,20 +1098,48 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
       const o = await diagnosisFor(args);
       if (!o.ready) {
         if (!o.waiting) return o.result;
-        return failure(
-          `The report card isn't ready yet. ${o.result.content[0].text} ` +
-            'Call coach_diagnosis until it is done, then coach_report again.',
+        const message =
+          o.total > 0
+            ? `Analysed ${o.done} of ${o.total} games. Ask for the report again in a minute.`
+            : 'Getting your games from Chess.com. Ask for the report again in a minute.';
+        const status: StatusView = {
+          kind: 'status',
+          title: 'Still analysing your games',
+          message,
+          progress: { done: o.done, total: o.total },
+        };
+        return reply(message, { ...status });
+      }
+
+      let positions: ReportPosition[] | undefined;
+      let positionsNote: string | null = null;
+      try {
+        positions = await buildReportPositions(o.d, o.games, deepEngine(), studentOrNothing(o.player));
+      } catch (e) {
+        positionsNote = `The positions to train could not be checked just now (${msg(e)}), so the card shows none.`;
+      }
+      const words = reportWords(o.d, positions?.length ?? 0);
+      const head = headline ?? words.headline;
+      const view = toReportView(o.d, head, { subhead: words.subhead, positions, cta: DEFAULT_REPORT_CTA });
+
+      const lines = [`Report card: ${head} ${words.subhead}`, '', diagnosisText(practiceView(o.view), { practice: true }), ''];
+      if (positions && positions.length > 0) {
+        const openings = [...new Set(positions.map((p) => p.opening).filter((x): x is string => x !== null))];
+        lines.push(
+          `The card shows ${plural(positions.length, 'position')} to train this week` +
+            `${openings.length ? ` (${openings.join('; ')})` : ''}. They are today's practice positions: don't name or ` +
+            'show any move in them; coach_ask_position asks them.',
         );
       }
-      const head = headline ?? defaultHeadline(o.d);
-      const next =
+      if (positionsNote) lines.push(positionsNote);
+      lines.push(
         o.d.focus === null
           ? 'No focus yet, so there is nothing to practise: say so plainly.'
-          : `Practice positions for the focus (${focusLabel(o.d)}): call coach_ask_position without a gameId; ` +
-            'each is checked with a deeper search before it is asked.';
-      const lines = [`Report card headline: ${head}`, '', diagnosisText({ ...o.view, examples: [] }), '', next];
+          : `Next: practice for the focus (${focusLabel(o.d)}) with coach_ask_position without a gameId; ` +
+              'each position is checked with a deeper search before it is asked.',
+      );
       if (o.skipped) lines.push(`${plural(o.skipped, 'game')} could not be read and ${o.skipped === 1 ? 'was' : 'were'} left out.`);
-      return reply(lines.join('\n'), { ...toReportView(o.d, head) });
+      return reply(lines.join('\n'), { ...view });
     },
   );
 
@@ -954,12 +1149,13 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
     {
       title: 'Ask the player a position',
       description:
-        'Shows a position from the player\'s games as a question: the board before their move, with no arrows, no ' +
+        "Shows a position from the player's games as a question: the board before their move, with no arrows, no " +
         'evaluation and no hint (try first). Without gameId and ply it picks the next practice position for the focus of ' +
-        'the last coach_report or coach_diagnosis, skipping ones already asked; with them it asks that position (for ' +
-        'the warm-up from coach_student). Each position is checked with a deeper search first and only asked if the ' +
-        'game move really was a mistake there, so this takes a few seconds. Never name or hint at a move or evaluation ' +
-        'until coach_check_move has scored the player\'s try.',
+        'the last coach_report or coach_diagnosis, skipping ones already asked this session, up to about six a session; ' +
+        'with them it asks that position (the warm-up from coach_student). Each position is checked with a deeper search ' +
+        'first and only asked if the game move really went wrong there, so this takes a few seconds. When it says there ' +
+        "are no more, practice is over for today: say so honestly. Never name or hint at a move or evaluation until " +
+        "coach_check_move has scored the player's try.",
       inputSchema: {
         gameId: z.string().min(1).optional().describe('Game id of a position to ask (with ply); leave out for the next practice position'),
         ply: z.number().int().min(0).optional().describe("0-based ply of the player's own move (with gameId)"),
@@ -973,72 +1169,78 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
       if ((gameId === undefined) !== (ply === undefined)) {
         return failure('Give both gameId and ply, or neither (for the next practice position).');
       }
-      const player = playerFor(username);
-      const lesson = player ? lessons.get(player) : undefined;
-      let engine: DisplayEngine;
+      let player: string | null;
       try {
-        engine = deepEngine();
+        player = playerFor(username);
       } catch (e) {
-        return failure(`Could not check the position: ${msg(e)}`);
+        return failure(msg(e));
       }
+      const lesson = player ? lessons.get(player) : undefined;
+      if (lesson) lessonSession(lesson);
+      const ask = (facts: PositionFacts) => {
+        lesson?.asked.add(refKey(facts.gameId, facts.ply));
+        return reply(questionText(facts, question), { ...toQuestionView(facts, question) });
+      };
 
-      let picked: { c: CachedGame; ply: number; facts: PositionFacts };
       if (gameId !== undefined && ply !== undefined) {
         const own = ownPosition(gameId, ply);
         if ('error' in own) return own.error;
+        // A repeated position is judged by the repeated-position line, anything else as a single mistake.
+        const fen = gamePlies(own.c)?.[ply]?.fenBefore;
+        const kind: PracticeKind = lesson && fen && lesson.d.repeated.some((r) => r.key === positionKey(fen)) ? 'repeated' : 'mistake';
         let facts: PositionFacts;
         try {
-          facts = await deepPositionFacts(own.c, ply, engine);
+          facts = await deepPositionFacts(own.c, ply, deepEngine());
         } catch (e) {
           return failure(`Could not check this position: ${msg(e)}`);
         }
-        if (!isTeachable(own.c.analysis.plies[ply].classification, facts)) {
-          lesson?.asked.add(refKey(gameId, ply));
+        if (!isTeachable(kind, own.c.analysis.plies[ply].classification, facts)) {
+          lesson?.cleared.add(refKey(gameId, ply));
           return failure(
-            "On a deeper check, the move played in the game here wasn't a real mistake, so this position isn't worth " +
+            "On a deeper check, the move played in the game here didn't really go wrong, so this position isn't worth " +
               'practising. Call coach_ask_position without gameId and ply for the next practice position.',
           );
         }
-        picked = { c: own.c, ply, facts };
-      } else {
-        if (!lesson) {
-          return failure('No lesson yet: call coach_report (or coach_diagnosis) for this player first, then ask again.');
-        }
-        const byId = new Map(lesson.games.map((c) => [c.game.id, c]));
-        const exclude = new Set(lesson.asked);
-        try {
-          const s = loadStudent(lesson.player);
-          for (const k of practiceExclusions(s, openIndex(lesson.player, s), byId)) exclude.add(k);
-        } catch {
-          // No readable student file: only this session's positions are left out.
-        }
-        const cands = samePatternPositions(lesson.d, lesson.games, [...exclude], ASK_CANDIDATES);
-        if (cands.length === 0) {
-          return failure(
-            lesson.d.focus === null
-              ? 'There is no focus yet, so there is nothing to practise.'
-              : 'No more practice positions for this focus in these games. Move on to the rule of thumb.',
-          );
-        }
-        let r: Awaited<ReturnType<typeof firstTeachable>>;
-        try {
-          r = await firstTeachable(cands, (id) => byId.get(id) ?? readCached(id), (c, p) => deepPositionFacts(c, p, engine), ASK_MAX_CHECKS);
-        } catch (e) {
-          return failure(`Could not check the next position: ${msg(e)}`);
-        }
-        for (const x of r.skipped) lesson.asked.add(refKey(x.gameId, x.ply));
-        if (!r.found) {
-          return failure(
-            `The deeper check cleared the ${plural(r.skipped.length, 'position')} it looked at (the game move held up). ` +
-              (cands.length > r.skipped.length
-                ? 'Call coach_ask_position again to check the next ones.'
-                : 'No more practice positions for this focus in these games.'),
-          );
-        }
-        picked = r.found;
+        return ask(facts);
       }
-      lesson?.asked.add(refKey(picked.c.game.id, picked.ply));
-      return reply(questionText(picked.facts, question), { ...toQuestionView(picked.facts, question) });
+
+      if (!lesson) {
+        return failure('No lesson yet: call coach_report (or coach_diagnosis) for this player first, then ask again.');
+      }
+      if (lesson.picked >= SESSION_POSITIONS) {
+        return failure(
+          `That's enough practice for one session (${plural(lesson.picked, 'position')}). Move on to the rule of thumb.`,
+        );
+      }
+      const byId = new Map(lesson.games.map((c) => [c.game.id, c]));
+      const exclude = new Set([...lesson.asked, ...lesson.cleared]);
+      const student = studentOrNothing(lesson.player);
+      if (student) for (const k of practiceExclusions(student, openIndex(lesson.player, student), byId)) exclude.add(k);
+      const cands = samePatternPositions(lesson.d, lesson.games, [...exclude], ASK_CANDIDATES);
+      const noMore =
+        `No more practice positions for this focus in these games (${plural(lesson.picked, 'position')} this session). ` +
+        'Say so honestly and move on to the rule of thumb.';
+      if (cands.length === 0) {
+        return failure(lesson.d.focus === null ? 'There is no focus yet, so there is nothing to practise.' : noMore);
+      }
+      let r: Awaited<ReturnType<typeof firstTeachable>>;
+      try {
+        const engine = deepEngine();
+        r = await firstTeachable(cands, (id) => byId.get(id) ?? readCached(id), (c, p) => deepPositionFacts(c, p, engine), ASK_MAX_CHECKS);
+      } catch (e) {
+        return failure(`Could not check the next position: ${msg(e)}`);
+      }
+      for (const x of r.skipped) lesson.cleared.add(refKey(x.gameId, x.ply));
+      if (!r.found) {
+        return failure(
+          cands.length > r.skipped.length
+            ? `The deeper check cleared the ${plural(r.skipped.length, 'position')} it looked at (the game move held up). ` +
+                'Call coach_ask_position again to check the next ones.'
+            : noMore,
+        );
+      }
+      lesson.picked++;
+      return ask(r.found.facts);
     },
   );
 
@@ -1049,10 +1251,10 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
       title: "Score the player's try",
       description:
         'Scores the move the player tried in a position from coach_ask_position, with a deeper search, records it in ' +
-        "their student file, and shows it on the board against Stockfish's best move. Call it once the player has given " +
-        "their move and their reason. Returns the verdict (right means losing at most " +
-        `${REPEAT_CFG.wrongLossPts}% win chance against the best move), both win chances, the best line, the opponent's ` +
-        'reply to their move, and the game move\'s numbers. ' +
+        "their student file (only the first try at a position counts), and shows it on the board against Stockfish's " +
+        'best move. Call it once the player has given their move and their reason. Returns the verdict (right means ' +
+        `losing at most ${REPEAT_CFG.wrongLossPts}% win chance against the best move), both win chances, the best line, ` +
+        "the opponent's reply to their move, and the game move's numbers. " +
         NO_INVENTED_FACTS,
       inputSchema: {
         gameId: z.string().min(1).describe('The gameId from coach_ask_position'),
@@ -1065,34 +1267,56 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
     async ({ gameId, ply, moveSan, username }) => {
       const own = ownPosition(gameId, ply);
       if ('error' in own) return own.error;
+      const illegal = failure(
+        `"${moveSan}" is not a legal move here, or it is ambiguous (which piece?). ${capitalize(own.c.game.myColor)} is to move. ` +
+          'Ask the player for their move again; nothing was recorded.',
+      );
+      // Checked before any engine is started.
+      if (!legalAttempt(own.c, ply, moveSan)) return illegal;
+      let player: string | null;
+      try {
+        player = playerFor(username, own.c);
+      } catch (e) {
+        return failure(msg(e));
+      }
       let r: CheckResult;
       try {
         r = await checkMove(own.c, ply, moveSan, deepEngine());
       } catch (e) {
         return failure(`Could not check this move: ${msg(e)}`);
       }
-      if (!r.legal) {
-        return failure(
-          `"${moveSan}" is not a legal move in this position (${capitalize(own.c.game.myColor)} to move). ` +
-            'Ask the player for their move again; nothing was recorded.',
-        );
+      if (!r.legal) return illegal;
+      const lesson = player ? lessons.get(player) : undefined;
+      if (lesson) {
+        lessonSession(lesson);
+        lesson.asked.add(refKey(gameId, ply));
       }
-      const player = playerFor(username, own.c);
-      lessons.get(player ?? '')?.asked.add(refKey(gameId, ply));
+
+      const key = positionKey(r.facts.fenBefore);
+      const keyOf = boardKeyFinder(new Map((lesson?.games ?? []).map((c) => [c.game.id, c])));
       let tally: string;
       try {
         if (!player) throw new Error('no username');
-        const s = editStudent(player, (st) =>
-          recordAttempt(st, {
+        let recorded = true;
+        const s = editStudent(player, (st) => {
+          if (triedBoard(st.sessions[st.sessions.length - 1], key, keyOf)) {
+            recorded = false;
+            return st;
+          }
+          return recordAttempt(st, {
             gameId,
             ply,
             moveSan: r.attempt.moveSan,
             correct: r.correct,
             lossPts: Math.round(r.lossPts * 10) / 10,
-          }),
-        );
-        const tried = s.sessions[s.sessions.length - 1].tried;
-        tally = `Recorded in ${player}'s student file: ${tried.filter((t) => t.correct).length} of ${tried.length} right this session.`;
+            key,
+          });
+        });
+        const firsts = firstTries(s.sessions[s.sessions.length - 1]);
+        const count = `${firsts.filter((t) => t.correct).length} of ${firsts.length} right this session`;
+        tally = recorded
+          ? `Recorded in ${player}'s student file: ${count}.`
+          : `Not recorded: only your first try at a position counts (${count}).`;
       } catch (e) {
         tally = `Not recorded in the student file: ${msg(e)}.`;
       }
@@ -1113,7 +1337,7 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
       description:
         "Saves, in the player's student file, a thinking error you noticed behind their reason (one short plain sentence, " +
         'e.g. "didn\'t ask what the last move threatened"), and/or the session\'s one rule of thumb for live games. ' +
-        'Name no moves in either: the next session reads them out before the player retries the position.',
+        'Name no moves in either: the next session reads them out after the warm-up try.',
       inputSchema: {
         note: z.string().trim().min(1).max(300).optional().describe('The thinking error, in one short sentence, naming no moves'),
         rule: z.string().trim().min(1).max(300).optional().describe("This session's rule of thumb for live games"),
@@ -1122,7 +1346,12 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
     },
     async ({ note, rule, username }) => {
       if (!note && !rule) return failure('Give a note (a thinking error), a rule (the rule of thumb), or both.');
-      const player = playerFor(username);
+      let player: string | null;
+      try {
+        player = playerFor(username);
+      } catch (e) {
+        return failure(msg(e));
+      }
       if (!player) return failure("Give the player's username (no player in this session yet).");
       let s: StudentFile;
       try {
@@ -1148,12 +1377,18 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
     {
       title: 'What the coach remembers',
       description:
-        "Reads the player's student file for the warm-up: the last session's focus, how many positions they got right, " +
-        'the thinking errors noted and the rule of thumb, plus one position from it to ask again with coach_ask_position.',
+        "Reads the player's student file for the warm-up: one position from last session to ask again first, then (after " +
+        "the player's try) the last session's focus, how many positions they got right on the first try, the thinking " +
+        'errors noted and the rule of thumb.',
       inputSchema: { username: optionalUsername },
     },
     async ({ username }) => {
-      const player = playerFor(username);
+      let player: string | null;
+      try {
+        player = playerFor(username);
+      } catch (e) {
+        return failure(msg(e));
+      }
       if (!player) return failure("Give the player's username (no player in this session yet).");
       let s: StudentFile;
       try {
@@ -1167,18 +1402,20 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
       if (!last) {
         lines.push(`No earlier sessions for ${player}: this is the first one, so skip the warm-up.`);
       } else {
-        lines.push(last.text);
         if (last.warmUp) {
           lines.push(
-            `Warm-up from last time: gameId ${last.warmUp.gameId}, ply ${last.warmUp.ply}. Ask it again with coach_ask_position (try first).`,
+            `Warm-up first: ask gameId ${last.warmUp.gameId}, ply ${last.warmUp.ply} again with coach_ask_position (try first). ` +
+              "Read out the rest only after the player's try.",
           );
         }
+        lines.push(last.text);
       }
       const earlier = s.sessions.filter((x, i) => i !== cur && (x.tried.length > 0 || x.thinkingNotes.length > 0)).length;
       if (earlier > 1) lines.push(`Sessions so far: ${earlier}.`);
-      const now = cur === null ? null : s.sessions[cur];
-      if (now && now.tried.length > 0) {
-        lines.push(`This session so far: ${now.tried.filter((t) => t.correct).length} of ${now.tried.length} right.`);
+      const nowSession = cur === null ? null : s.sessions[cur];
+      if (nowSession && nowSession.tried.length > 0) {
+        const firsts = firstTries(nowSession);
+        lines.push(`This session so far: ${firsts.filter((t) => t.correct).length} of ${firsts.length} right.`);
       }
       return reply(lines.join('\n'), {
         username: player,

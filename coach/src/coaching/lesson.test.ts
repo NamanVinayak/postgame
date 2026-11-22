@@ -11,7 +11,16 @@ import { positionKey, type RepeatedPosition } from '../diagnosis/repeated';
 import { fixtureGame, randomSans } from '../diagnosis/testGames';
 import { createDisplayEngine } from '../engine/displayEngine';
 import type { PositionFacts } from './positionFacts';
-import { checkMove, DRILLS_PER_POSITION, firstTeachable, isTeachable, practiceExclusions, refKey, samePatternPositions } from './lesson';
+import {
+  checkMove,
+  DRILLS_PER_POSITION,
+  firstTeachable,
+  isTeachable,
+  practiceExclusions,
+  refKey,
+  rightSessionsByBoard,
+  samePatternPositions,
+} from './lesson';
 import { emptyStudent, recordAttempt, startSession } from './student';
 
 // Made-up game: 1.e4 e5 2.Nf3 Nc6 3.Bc4 Nf6 4.Ng5 d5. Ply 5 is Black's ...Nf6 (the player is Black).
@@ -189,12 +198,12 @@ describe('samePatternPositions', () => {
       [refKey(g1.game.id, 4), refKey(g1.game.id, 10), refKey(g2.game.id, 6)].sort(),
     );
     // One per game first, worst first.
-    expect(all[0]).toEqual({ gameId: g1.game.id, ply: 4 });
-    expect(all[1]).toEqual({ gameId: g2.game.id, ply: 6 });
+    expect(all[0]).toEqual({ gameId: g1.game.id, ply: 4, kind: 'mistake' });
+    expect(all[1]).toEqual({ gameId: g2.game.id, ply: 6, kind: 'mistake' });
 
     const ex = [refKey(g1.game.id, 4), refKey(g2.game.id, 6)];
     const rest = samePatternPositions(d, games, ex, 10);
-    expect(rest).toEqual([{ gameId: g1.game.id, ply: 10 }]); // g3's ply 4 is the same board as an excluded one
+    expect(rest).toEqual([{ gameId: g1.game.id, ply: 10, kind: 'mistake' }]); // g3's ply 4 is the same board as an excluded one
     for (const r of rest) {
       expect(ex).not.toContain(refKey(r.gameId, r.ply));
       expect(keyAt(g1, 4)).not.toBe(keyAt(games.find((c) => c.game.id === r.gameId)!, r.ply));
@@ -216,11 +225,12 @@ describe('samePatternPositions', () => {
       gameIds: [c.game.id],
     });
     const d = diagnosis({ kind: 'repeated', keys: [keyAt(g2, 6)] }, [rep(g1, 10), rep(g2, 6)]);
+    // No opening names in these games, so no opening top-up.
     expect(samePatternPositions(d, games, [], 5)).toEqual([
-      { gameId: g2.game.id, ply: 6 },
-      { gameId: g1.game.id, ply: 10 },
+      { gameId: g2.game.id, ply: 6, kind: 'repeated' },
+      { gameId: g1.game.id, ply: 10, kind: 'repeated' },
     ]);
-    expect(samePatternPositions(d, games, [refKey(g2.game.id, 6)], 5)).toEqual([{ gameId: g1.game.id, ply: 10 }]);
+    expect(samePatternPositions(d, games, [refKey(g2.game.id, 6)], 5)).toEqual([{ gameId: g1.game.id, ply: 10, kind: 'repeated' }]);
   });
 });
 
@@ -232,15 +242,21 @@ describe('only real mistakes are taught', () => {
     ...over,
   });
 
-  it('isTeachable: the game move must still be a mistake on the deeper check', () => {
-    expect(isTeachable('mistake', facts({}))).toBe(true);
-    // The quick check called it a mistake; the deep check doesn't.
-    expect(isTeachable('mistake', facts({ classification: 'inaccuracy', winAfter: 53 }))).toBe(false);
-    expect(isTeachable('blunder', facts({ classification: 'best', bestSan: null, bestUci: null, winAfter: 60 }))).toBe(false);
-    // Only mistakes and blunders at depth are taught, even for a repeated position's inaccuracy.
-    expect(isTeachable('inaccuracy', facts({ classification: 'inaccuracy', winAfter: 53 }))).toBe(false);
-    expect(isTeachable('inaccuracy', facts({ classification: 'good', winAfter: 57 }))).toBe(false);
-    expect(isTeachable('inaccuracy', facts({ classification: 'mistake', winAfter: 48 }))).toBe(true);
+  it('isTeachable: a single mistake must still be a mistake or blunder on the deeper check', () => {
+    expect(isTeachable('mistake', 'mistake', facts({}))).toBe(true);
+    // The quick check called it a mistake; the deep check finds only an inaccuracy.
+    expect(isTeachable('mistake', 'mistake', facts({ classification: 'inaccuracy', winAfter: 53 }))).toBe(false);
+    expect(isTeachable('mistake', 'blunder', facts({ classification: 'best', bestSan: null, bestUci: null, winAfter: 60 }))).toBe(false);
+    expect(isTeachable('mistake', 'inaccuracy', facts({ classification: 'mistake', winAfter: 48 }))).toBe(true);
+  });
+
+  it('isTeachable: a repeated position needs the game move to lose more than 5 at depth and not be the deep best', () => {
+    // The same line checkMove uses: an inaccuracy that loses 7 is still a wrong move there.
+    expect(isTeachable('repeated', 'inaccuracy', facts({ classification: 'inaccuracy', winAfter: 53 }))).toBe(true);
+    expect(isTeachable('repeated', 'mistake', facts({ classification: 'inaccuracy', winAfter: 53 }))).toBe(true);
+    expect(isTeachable('repeated', 'inaccuracy', facts({ classification: 'good', winAfter: 57 }))).toBe(false);
+    expect(isTeachable('repeated', 'inaccuracy', facts({ classification: 'inaccuracy', winAfter: 55 }))).toBe(false); // exactly 5
+    expect(isTeachable('repeated', 'blunder', facts({ classification: 'best', bestSan: null, bestUci: null, winAfter: 30 }))).toBe(false);
   });
 
   it('skipsPositionsThatAreNotRealMistakes: deep-checks each candidate in turn and skips the cleared ones', async () => {
@@ -261,13 +277,53 @@ describe('only real mistakes are taught', () => {
       { gameId: b.game.id, ply: 8 },
     ];
     const r = await firstTeachable(refs, (id) => byId.get(id) ?? null, deep, 5);
-    expect(r.found).toMatchObject({ ply: 8, facts: { gameId: b.game.id } });
+    expect(r.found).toMatchObject({ ply: 8, facts: { gameId: b.game.id }, kind: 'mistake' });
     expect(r.skipped).toEqual([refs[0], refs[1]]);
     expect(checked).toEqual([refKey(a.game.id, 4), refKey(b.game.id, 8)]);
 
     // At most `maxChecks` deep checks.
     const capped = await firstTeachable(refs, (id) => byId.get(id) ?? null, deep, 1);
     expect(capped.found).toBeNull();
+  });
+});
+
+describe('practice top-up for a repeated-position focus', () => {
+  const ECO = (slug: string) => `[ECOUrl "https://www.chess.com/openings/${slug}"]\n\n*`;
+  const withEco = (c: CachedGame, slug: string) => ((c.game.pgn = ECO(slug)), c);
+  // f1/f2 reach the focus position; f2 and s1 are Sicilians, k1 is a Caro-Kann.
+  const f1 = withEco(mistakeGame('https://example.test/game/f1', 41, { 6: 20 }), 'Sicilian-Defense-Alapin-Variation');
+  const f2 = withEco(mistakeGame('https://example.test/game/f2', 41, { 6: 18, 12: 25 }), 'Sicilian-Defense-Old-Sicilian');
+  const s1 = withEco(mistakeGame('https://example.test/game/s1', 42, { 8: 30, 34: 40 }, 50), 'Sicilian-Defense-Bowdler-Attack');
+  const k1 = withEco(mistakeGame('https://example.test/game/k1', 43, { 8: 35 }), 'Caro-Kann-Defense');
+  const o1 = mistakeGame('https://example.test/game/o1', 44, { 10: 15 }); // another repeated position
+  const games = [f1, f2, s1, k1, o1];
+  const fact = (c: CachedGame, ply: number) => gamePlies(c)![ply];
+  const rep = (c: CachedGame, ply: number, ids: string[]): RepeatedPosition => ({
+    key: positionKey(fact(c, ply).fenBefore),
+    fen: fact(c, ply).fenBefore,
+    movesFromStart: [],
+    seen: 3,
+    wrong: 2,
+    avgLossPts: 15,
+    usual: [{ move: fact(c, ply).san, times: 2, lossPts: 15 }],
+    best: 'Nc3',
+    gameIds: ids,
+  });
+
+  it('after the focus positions: the other repeated positions, then early mistakes in games of the same opening family', () => {
+    const focusRep = rep(f1, 6, [f1.game.id, f2.game.id]);
+    const other = rep(o1, 10, [o1.game.id]);
+    const d = diagnosis({ kind: 'repeated', keys: [focusRep.key] }, [other, focusRep]);
+    const out = samePatternPositions(d, games, [], 10);
+    expect(out[0]).toMatchObject({ kind: 'repeated' });
+    expect(positionKey(fact(games.find((c) => c.game.id === out[0].gameId)!, out[0].ply).fenBefore)).toBe(focusRep.key);
+    expect(out[1]).toEqual({ gameId: o1.game.id, ply: 10, kind: 'repeated' });
+    // Then Sicilian games' mistakes up to move 15, worst first: s1 ply 8 (30), f2 ply 12 (25).
+    // Not s1 ply 34 (move 18), not the Caro-Kann, and not the focus board again (f2 ply 6).
+    expect(out.slice(2)).toEqual([
+      { gameId: s1.game.id, ply: 8, kind: 'mistake' },
+      { gameId: f2.game.id, ply: 12, kind: 'mistake' },
+    ]);
   });
 });
 
@@ -278,23 +334,26 @@ describe('practiceExclusions', () => {
   const h3 = mistakeGame('https://example.test/game/h3', 31, { 4: 30 });
   const byId = new Map([h1, h2, h3].map((c) => [c.game.id, c]));
   const tried = (c: CachedGame, ply: number, correct: boolean) => ({ gameId: c.game.id, ply, moveSan: 'x', correct, lossPts: correct ? 0 : 12 });
+  const X = () => positionKey(gamePlies(h1)![4].fenBefore);
 
-  it('leaves out this session’s tries and boards right in three sessions; brings back the rest later', () => {
+  it('leaves out this session’s tries and boards whose first try was right in three sessions; brings back the rest', () => {
     expect(DRILLS_PER_POSITION).toBe(3);
     let s = emptyStudent('alice');
-    s = recordAttempt(startSession(s, null, 1), tried(h1, 4, true)); // board X right (1)
+    s = recordAttempt(startSession(s, null, 1), tried(h1, 4, true)); // board X: first try right (1)
     s = recordAttempt(s, tried(h2, 6, true)); // board Y right once only
     s = recordAttempt(startSession(s, null, 2), tried(h3, 4, true)); // board X right (2), via another game
     s = recordAttempt(startSession(s, null, 3), tried(h1, 4, false));
-    s = recordAttempt(s, tried(h1, 4, true)); // board X right (3)
+    s = recordAttempt(s, tried(h1, 4, true)); // right only after the answer was shown: doesn't count
     s = startSession(s, null, 4); // running now
     s = recordAttempt(s, tried(h2, 10, false));
 
-    const ex = practiceExclusions(s, 3, byId);
-    expect(new Set(ex)).toEqual(new Set([refKey(h1.game.id, 4), refKey(h3.game.id, 4), refKey(h2.game.id, 10)]));
-    expect(ex).not.toContain(refKey(h2.game.id, 6)); // right once: practised again in a later session
-    // Before the third right session, board X still comes back.
-    const two = { ...s, sessions: s.sessions.slice(0, 2) };
-    expect(practiceExclusions(two, null, byId)).toEqual([]);
+    expect(rightSessionsByBoard(s, byId).get(X())).toEqual(new Set([0, 1]));
+    expect(practiceExclusions(s, 3, byId)).toEqual([refKey(h2.game.id, 10)]);
+
+    // A third session whose first try at X is right: X is learned and left out wherever it was tried.
+    s = recordAttempt(startSession(s, null, 5), tried(h3, 4, true));
+    const ex = practiceExclusions(s, 4, byId);
+    expect(new Set(ex)).toEqual(new Set([refKey(h1.game.id, 4), refKey(h3.game.id, 4)]));
+    expect(ex).not.toContain(refKey(h2.game.id, 6)); // right once: practised again later
   });
 });
