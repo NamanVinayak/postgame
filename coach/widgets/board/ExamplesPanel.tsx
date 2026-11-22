@@ -21,6 +21,17 @@ import {
 import { MiniBoard, toMoveText } from './MiniBoard';
 import './report.css';
 
+/**
+ * Brings an element on screen now, and again shortly after: inline, the host resizes the frame
+ * a moment after the content changes, and only then can the chat scroll to it. Returns a cleanup.
+ */
+export function reveal(el: HTMLElement, block: ScrollLogicalPosition = 'nearest'): () => void {
+  const show = () => el.scrollIntoView?.({ block });
+  show();
+  const later = [setTimeout(show, 200), setTimeout(show, 600)];
+  return () => later.forEach(clearTimeout);
+}
+
 /** What a row needs from the host: drafting a chat message and opening a link (either may be missing). */
 type RowApp = Partial<Pick<App, 'sendMessage' | 'openLink'>>;
 
@@ -239,9 +250,9 @@ export function ExamplesPanel({
     return () => loader.close();
   }, [loader, initial]);
   useEffect(() => {
-    if (!onBack) return;
-    heading.current?.focus({ preventScroll: true });
-    heading.current?.scrollIntoView?.({ block: 'nearest' });
+    if (!onBack || !heading.current) return;
+    heading.current.focus({ preventScroll: true });
+    return reveal(heading.current);
     // Only when the panel opens.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
