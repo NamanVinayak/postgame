@@ -1458,7 +1458,8 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
         `| Stockfish | ${info.stockfishPath} (${info.binaryFound ? 'found' : 'NOT FOUND: install with brew install stockfish'}) |`,
         `| Analysis engine | ${run(analysis.running)}; ${analysis.movetimeMs} ms per position, MultiPV ${analysis.multiPv}, ` +
           `${analysis.threads} threads, ${analysis.hashMb} MB hash; ${analysis.positionsSearched} positions searched |`,
-        `| Board engine (deep check) | ${run(display.running)}; ${display.movetimeMs} ms per position, MultiPV ${display.multiPv}; ` +
+        `| Board engine (deep check) | ${run(display.running)}; depth ${display.depth}, ` +
+          `${display.threads} thread${display.threads === 1 ? '' : 's'}, MultiPV ${display.multiPv} (same answer every time); ` +
           `${display.positionsSearched} positions searched |`,
         ...(jobs.length === 0
           ? ['| Analysis jobs | none this session |']
