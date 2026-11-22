@@ -274,7 +274,7 @@ describe('the examples panel', () => {
     const s = await ready(page(0, 1));
     const html = panelHtml(s);
     expect(slipText(row(0))).toBe('Move 23: 82% → 30% (quick check)');
-    expect(html).toContain('Move 23: 82% → 30% (quick check)');
+    expect(html.replace(/<[^>]+>/g, '')).toContain('Move 23: 82% → 30% (quick check)');
     expect(html).toContain('21 Nov 2026');
     expect(html).toContain('vs 1083');
     expect(html).toMatch(/class="rc-chip rc-chip--loss"[^>]*>Loss</);

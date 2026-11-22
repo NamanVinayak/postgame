@@ -26,6 +26,7 @@ type RowApp = Partial<Pick<App, 'sendMessage' | 'openLink'>>;
 
 const RESULT = { win: 'Win', draw: 'Draw', loss: 'Loss' } as const;
 const PLAYED_SQUARE = 'radial-gradient(circle, rgba(180, 46, 36, 0.5) 0 58%, rgba(180, 46, 36, 0.28) 60%)';
+const QUICK = '(quick check)';
 const SLOW_SLIP = 'No single costly move in this game (it slipped away slowly or on the clock).';
 
 /**
@@ -90,7 +91,11 @@ function ExampleCard({ app, row, index, source }: { app: RowApp; row: ExampleRow
             <span>vs {row.opponentRating ?? 'unrated'}</span>
             <span className={`rc-chip rc-chip--${row.result}`}>{RESULT[row.result]}</span>
           </div>
-          <div className="rc-exMove">{slipText(row)}</div>
+          <div className="rc-exMove">
+            {/* slipText, with "(quick check)" kept on one line and set softer. */}
+            {slipText(row).replace(QUICK, '')}
+            <span className="rc-exQuick">{QUICK}</span>
+          </div>
           <Sparkline timeline={row.timeline} slipIndex={row.slipIndex} moveNo={row.slipMoveNo} />
         </div>
       </div>
@@ -174,7 +179,7 @@ export function ExamplesPanelView({
       {state.phase === 'failed' && (
         <div className="rc-exError" role="alert">
           <p>{state.message}</p>
-          <button type="button" className="rc-ghost" onClick={onRetry}>
+          <button type="button" className="rc-retry" onClick={onRetry}>
             Try again
           </button>
           <p className="rc-exNote">Or ask the coach in the chat.</p>

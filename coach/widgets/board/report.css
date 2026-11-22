@@ -496,6 +496,7 @@
 .rc-heroBtn:focus-visible,
 .rc-leakBtn:focus-visible,
 .rc-back:focus-visible,
+.rc-retry:focus-visible,
 .rc-exTry:focus-visible,
 .rc-exLink:focus-visible,
 .rc-more:focus-visible,
@@ -739,7 +740,8 @@
 .rc-exPanel {
   margin-top: 14px;
 }
-.rc-back {
+.rc-back,
+.rc-retry {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -752,7 +754,8 @@
   font-weight: 650;
   cursor: pointer;
 }
-.rc-back:hover {
+.rc-back:hover,
+.rc-retry:hover {
   border-color: var(--rc-muted);
 }
 .rc-exTitle {
@@ -793,7 +796,7 @@
   color: var(--rc-bad);
   font-weight: 650;
 }
-.rc-exError .rc-ghost {
+.rc-exError .rc-retry {
   margin-top: 10px;
 }
 .rc-exList {
@@ -855,6 +858,11 @@
   color: var(--rc-ink);
   font-weight: 650;
   font-variant-numeric: tabular-nums;
+}
+.rc-exQuick {
+  color: var(--rc-muted);
+  font-weight: 500;
+  white-space: nowrap;
 }
 .rc-spark {
   display: block;
@@ -975,5 +983,13 @@
   }
   .rc-exTitle {
     font-size: 24px;
+  }
+  .rc-exTry,
+  .rc-exLink {
+    padding: 7px 10px;
+    font-size: 13px;
+  }
+  .rc-exActions {
+    gap: 6px;
   }
 }
