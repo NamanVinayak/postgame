@@ -28,6 +28,23 @@ export const STATS_CFG = {
   bootstrapN: 10000,       // resamples per area; the adjusted range reads the 0.2% tails, which need this many
   seed: 1804,
 };
+// "Where your points go": the player's own games only. Each of the player's moves gets one
+// situation, checked in this order: low on the clock → already winning → already losing →
+// first moves → endgame → balanced middlegame.
+export const LEAK_CFG = {
+  winningWinPct: 75,             // "already winning": your win % before the move ≥ 75
+  winningConsecutive: 2,         // a game counts as "clearly winning" after this many own moves in a row at ≥ 75
+  losingWinPct: 25,              // "already losing": your win % before the move ≤ 25
+  clockSec: 30, clockFrac: 0.1,  // low on the clock: clock before the move < max(30 s, 10% of the base time)
+  openingLastMove: 10,           // "your first 10 moves"
+  endgameMaxNonPawn: 26,         // endgame: both sides' Q9 R5 B3 N3 total ≤ 26 before the move
+  bootstrapN: 4000, seed: 1804,  // ranges from resampling whole games
+  focusMinWinningGames: 30,      // focus "keep the win" needs this many clearly-winning games…
+  focusKeepTheWinLostSharePct: 20, // …and lost-from-winning ≥ this share of all losses
+  focusClockMinLosses: 30,       // focus "the clock" needs this many losses…
+  focusClockSharePct: 15,        // …and losses on time ≥ this share of them
+  drillsPerWeek: 20,             // weekly practice target for the focus
+};
 export const DISPLAY_CFG = { movetimeMs: 1500, multiPv: 3 };   // deep search for anything shown or drilled
 // When a repeated position counts as a real recurring mistake.
 export const REPEAT_CFG = { minSeen: 3, minWrong: 2, wrongLossPts: 5, minAvgLossPts: 6 };
