@@ -17,7 +17,8 @@
   --rc-soft: #a3adbd;
   --rc-muted: #8b95a7;
   --rc-rule: rgba(148, 163, 184, 0.14);
-  --rc-accent: #5eead4;
+  --rc-accent: #5eead4; /* graphics: strokes, fills, focus rings */
+  --rc-accent-text: #5eead4; /* small text in the accent colour */
   --rc-fill0: rgba(94, 234, 212, 0.14);
   --rc-fill1: rgba(94, 234, 212, 0.42);
   --rc-glow: rgba(94, 234, 212, 0.5);
@@ -64,10 +65,12 @@
   --rc-sheen: radial-gradient(circle, rgba(20, 184, 166, 0.1), transparent 60%);
   --rc-text: #1e293b;
   --rc-strong: #0f172a;
-  --rc-soft: #475569;
-  --rc-muted: #64748b;
+  /* Small text is >= 4.5:1 on the lightest and the tinted parts of the card (WCAG AA). */
+  --rc-soft: #334155;
+  --rc-muted: #4f5d71;
   --rc-rule: rgba(15, 23, 42, 0.08);
   --rc-accent: #0d9488;
+  --rc-accent-text: #0f766e;
   --rc-fill0: rgba(13, 148, 136, 0.08);
   --rc-fill1: rgba(13, 148, 136, 0.26);
   --rc-glow: rgba(13, 148, 136, 0.28);
@@ -76,7 +79,7 @@
   --rc-range: rgba(13, 148, 136, 0.2);
   --rc-dot: #ffffff;
   --rc-good-bg: rgba(22, 163, 74, 0.1);
-  --rc-good-fg: #15803d;
+  --rc-good-fg: #166534;
   --rc-good-icon: #16a34a;
   --rc-good-on: #ffffff;
   --rc-bad-bg: rgba(225, 29, 72, 0.09);
@@ -97,9 +100,9 @@
   --rc-progress: #0d9488;
   --rc-pill-bg: rgba(13, 148, 136, 0.1);
   --rc-pill-fg: #0f766e;
-  --rc-cta-bg: linear-gradient(135deg, #14b8a6, #0d9488 55%, #0f766e);
+  --rc-cta-bg: linear-gradient(135deg, #0f766e, #0d6d65 55%, #115e59);
   --rc-cta-fg: #ffffff;
-  --rc-cta-shadow: 0 10px 24px rgba(13, 148, 136, 0.26);
+  --rc-cta-shadow: 0 10px 24px rgba(15, 118, 110, 0.28);
   --rc-ghost-bg: rgba(15, 23, 42, 0.06);
   --rc-ghost-fg: #334155;
   --rc-sq-dark: #6f7d5a;
@@ -154,7 +157,7 @@
   font-size: 11px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: var(--rc-accent);
+  color: var(--rc-accent-text);
   font-weight: 600;
 }
 .rc-ghost {
@@ -254,12 +257,6 @@
   stroke-dasharray: 5 5;
   stroke-linejoin: round;
 }
-.rc-peerDot {
-  fill: none;
-  stroke: var(--rc-peer);
-  stroke-width: 1.5;
-  stroke-dasharray: 3 3;
-}
 .rc-you {
   stroke: var(--rc-accent);
   stroke-width: 2.2;
@@ -292,7 +289,7 @@
   font-variant-numeric: tabular-nums;
 }
 .rc-axisNums b {
-  color: var(--rc-accent);
+  color: var(--rc-accent-text);
   font-weight: 650;
 }
 .rc-axisNums span {
@@ -450,7 +447,7 @@
 }
 .rc-verdictText em {
   font-style: normal;
-  color: var(--rc-accent);
+  color: var(--rc-accent-text);
 }
 .rc-sub {
   margin: 8px 0 0;
@@ -511,7 +508,7 @@
   font-size: 10.5px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--rc-accent);
+  color: var(--rc-accent-text);
   font-weight: 700;
 }
 .rc-mTitle {
