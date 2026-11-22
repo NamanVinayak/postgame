@@ -9,15 +9,16 @@
 import { Chess, type Move } from 'chess.js';
 import { evalToWinPct } from '../../../src/analysis/winPct';
 import type { Classification } from '../../../src/types';
-import type { CachedGame } from '../analysis/cache';
+import { readCached, type CachedGame } from '../analysis/cache';
 import { DISPLAY_CFG, REPEAT_CFG } from '../config';
 import { gamePlies, type PlyFact } from '../diagnosis/areas';
 import type { Diagnosis } from '../diagnosis/diagnose';
 import { positionKey } from '../diagnosis/repeated';
 import type { DisplayEngine } from '../engine/displayEngine';
 import type { Attempt } from '../server/views';
-import { deepDisagrees, deepPositionFacts, lineSan, ownGames, positionFacts, repeatedRefs, uciOf } from './explain';
+import { deepDisagrees, deepPositionFacts, isSerious, lineSan, ownGames, positionFacts, repeatedRefs, uciOf } from './explain';
 import type { PositionFacts } from './positionFacts';
+import type { StudentFile } from './student';
 
 export type { Attempt } from '../server/views';
 
@@ -137,17 +138,75 @@ export async function checkMove(c: CachedGame, ply: number, moveSan: string, eng
 }
 
 /**
- * Worth asking: the deep check still finds the game move a mistake. It must not clear a
- * quick-check mistake or blunder (`deepDisagrees`), the game move must not be the deep best,
- * and it must lose more than REPEAT_CFG.wrongLossPts, so `checkMove` would call the game move
- * wrong too.
+ * Worth asking: on the deep check the game move is still a mistake or a blunder (so it lost at
+ * least DELTA.mistake, more than REPEAT_CFG.wrongLossPts, and `checkMove` calls it wrong too),
+ * and it is not the deep best move. A quick-check mistake the deep check clears
+ * (`deepDisagrees`) is never asked; neither is a move that is only an inaccuracy at depth.
  */
 export function isTeachable(quick: Classification, deep: PositionFacts): boolean {
   return (
     !deepDisagrees(quick, deep.classification) &&
+    isSerious(deep.classification) &&
     deep.bestUci !== null &&
     deep.winBefore - deep.winAfter > REPEAT_CFG.wrongLossPts
   );
+}
+
+/** Right answers, each in a different session, after which a board counts as learned. */
+export const DRILLS_PER_POSITION = 3;
+
+/** The board (position key) at a game's ply, from `games` or else the cache; null if unknown. */
+function boardKeyFinder(games: Map<string, CachedGame>): (gameId: string, ply: number) => string | null {
+  const known = new Map<string, string | null>();
+  return (gameId, ply) => {
+    const k = refKey(gameId, ply);
+    if (!known.has(k)) {
+      const c = games.get(gameId) ?? readCached(gameId);
+      const fen = c ? gamePlies(c)?.[ply]?.fenBefore : undefined;
+      known.set(k, fen ? positionKey(fen) : null);
+    }
+    return known.get(k)!;
+  };
+}
+
+/**
+ * For each board (position key), the indexes of the student's sessions with a right answer
+ * there; the same board reached in another game counts as the same board.
+ */
+export function rightSessionsByBoard(student: StudentFile | undefined, games: Map<string, CachedGame>): Map<string, Set<number>> {
+  const out = new Map<string, Set<number>>();
+  if (!student) return out;
+  const keyOf = boardKeyFinder(games);
+  student.sessions.forEach((s, i) => {
+    for (const t of s.tried) {
+      if (!t.correct) continue;
+      const key = keyOf(t.gameId, t.ply);
+      if (!key) continue;
+      if (!out.has(key)) out.set(key, new Set());
+      out.get(key)!.add(i);
+    }
+  });
+  return out;
+}
+
+/**
+ * What practice leaves out, from the student file (as refKeys): everything tried in the
+ * running session (`current`, its index), and boards already answered right in
+ * DRILLS_PER_POSITION different sessions. A board got wrong, or right fewer times, comes back
+ * in a later session: that spacing is the point of practice.
+ */
+export function practiceExclusions(student: StudentFile, current: number | null, games: Map<string, CachedGame>): string[] {
+  const right = rightSessionsByBoard(student, games);
+  const keyOf = boardKeyFinder(games);
+  const out: string[] = [];
+  student.sessions.forEach((s, i) => {
+    for (const t of s.tried) {
+      const key = keyOf(t.gameId, t.ply);
+      const learned = key !== null && (right.get(key)?.size ?? 0) >= DRILLS_PER_POSITION;
+      if (i === current || learned) out.push(refKey(t.gameId, t.ply));
+    }
+  });
+  return out;
 }
 
 /**

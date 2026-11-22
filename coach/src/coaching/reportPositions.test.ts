@@ -98,10 +98,15 @@ describe('buildReportPositions', () => {
     repeated: [
       rep(Q, [{ move: 'c4', times: 2, lossPts: 7 }]),
       rep(R, [{ move: 'Nc3', times: 2, lossPts: 8 }]),
-      rep(P, [
-        { move: 'Bc4', times: 2, lossPts: 9 },
-        { move: 'Na3', times: 1, lossPts: 30 },
-      ]),
+      rep(
+        P,
+        [
+          { move: 'Bc4', times: 2, lossPts: 9 },
+          { move: 'Na3', times: 1, lossPts: 30 },
+          { move: 'Be2', times: 1, lossPts: 6 }, // the deep check clears it: not shown, not counted
+        ],
+        { wrong: 4 },
+      ),
     ],
     focus: { kind: 'repeated', keys: [positionKey(P)] },
     notes: [],
@@ -112,6 +117,7 @@ describe('buildReportPositions', () => {
     [P]: ev(60, ['d2d4', 'e5d4', 'f3d4']), // deep best d4 (the quick check said Bb5)
     [play(P, 'Bc4')]: ev(30, ['f8c5']), // Black +30: White loses about 8%
     [play(P, 'Na3')]: ev(120, ['d7d5']),
+    [play(P, 'Be2')]: ev(-40, ['d7d5']), // White still +40: under 2% lost
     [Q]: ev(30, ['c2c4', 'e7e6']),
     [R]: ev(40, ['g1f3', 'd7d6']),
     [play(R, 'Nc3')]: ev(-20, ['b8c6']), // White still +20: only about 2% lost
@@ -149,7 +155,7 @@ describe('buildReportPositions', () => {
         wrongUci: 'f1c4',
         bestSan: 'd4',
         bestUci: 'd2d4',
-        lossPts: 14,
+        lossPts: 16, // (2 × 9 + 30) / 3, over the moves shown
         wrongTimes: 3,
         seenTimes: 4,
         opening: 'Italian Game',

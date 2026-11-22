@@ -11,7 +11,8 @@ import { positionKey, type RepeatedPosition } from '../diagnosis/repeated';
 import { fixtureGame, randomSans } from '../diagnosis/testGames';
 import { createDisplayEngine } from '../engine/displayEngine';
 import type { PositionFacts } from './positionFacts';
-import { checkMove, firstTeachable, isTeachable, refKey, samePatternPositions } from './lesson';
+import { checkMove, DRILLS_PER_POSITION, firstTeachable, isTeachable, practiceExclusions, refKey, samePatternPositions } from './lesson';
+import { emptyStudent, recordAttempt, startSession } from './student';
 
 // Made-up game: 1.e4 e5 2.Nf3 Nc6 3.Bc4 Nf6 4.Ng5 d5. Ply 5 is Black's ...Nf6 (the player is Black).
 // Win numbers are fixture values, not engine output.
@@ -236,9 +237,10 @@ describe('only real mistakes are taught', () => {
     // The quick check called it a mistake; the deep check doesn't.
     expect(isTeachable('mistake', facts({ classification: 'inaccuracy', winAfter: 53 }))).toBe(false);
     expect(isTeachable('blunder', facts({ classification: 'best', bestSan: null, bestUci: null, winAfter: 60 }))).toBe(false);
-    // A repeated position's inaccuracy (lost ≥ 5) stays teachable if depth agrees it loses more than 5.
-    expect(isTeachable('inaccuracy', facts({ classification: 'inaccuracy', winAfter: 53 }))).toBe(true);
+    // Only mistakes and blunders at depth are taught, even for a repeated position's inaccuracy.
+    expect(isTeachable('inaccuracy', facts({ classification: 'inaccuracy', winAfter: 53 }))).toBe(false);
     expect(isTeachable('inaccuracy', facts({ classification: 'good', winAfter: 57 }))).toBe(false);
+    expect(isTeachable('inaccuracy', facts({ classification: 'mistake', winAfter: 48 }))).toBe(true);
   });
 
   it('skipsPositionsThatAreNotRealMistakes: deep-checks each candidate in turn and skips the cleared ones', async () => {
@@ -266,5 +268,33 @@ describe('only real mistakes are taught', () => {
     // At most `maxChecks` deep checks.
     const capped = await firstTeachable(refs, (id) => byId.get(id) ?? null, deep, 1);
     expect(capped.found).toBeNull();
+  });
+});
+
+describe('practiceExclusions', () => {
+  // h1 and h3 are the same random game (same boards); h2 is another.
+  const h1 = mistakeGame('https://example.test/game/h1', 31, { 4: 30 });
+  const h2 = mistakeGame('https://example.test/game/h2', 32, { 6: 30 });
+  const h3 = mistakeGame('https://example.test/game/h3', 31, { 4: 30 });
+  const byId = new Map([h1, h2, h3].map((c) => [c.game.id, c]));
+  const tried = (c: CachedGame, ply: number, correct: boolean) => ({ gameId: c.game.id, ply, moveSan: 'x', correct, lossPts: correct ? 0 : 12 });
+
+  it('leaves out this session’s tries and boards right in three sessions; brings back the rest later', () => {
+    expect(DRILLS_PER_POSITION).toBe(3);
+    let s = emptyStudent('alice');
+    s = recordAttempt(startSession(s, null, 1), tried(h1, 4, true)); // board X right (1)
+    s = recordAttempt(s, tried(h2, 6, true)); // board Y right once only
+    s = recordAttempt(startSession(s, null, 2), tried(h3, 4, true)); // board X right (2), via another game
+    s = recordAttempt(startSession(s, null, 3), tried(h1, 4, false));
+    s = recordAttempt(s, tried(h1, 4, true)); // board X right (3)
+    s = startSession(s, null, 4); // running now
+    s = recordAttempt(s, tried(h2, 10, false));
+
+    const ex = practiceExclusions(s, 3, byId);
+    expect(new Set(ex)).toEqual(new Set([refKey(h1.game.id, 4), refKey(h3.game.id, 4), refKey(h2.game.id, 10)]));
+    expect(ex).not.toContain(refKey(h2.game.id, 6)); // right once: practised again in a later session
+    // Before the third right session, board X still comes back.
+    const two = { ...s, sessions: s.sessions.slice(0, 2) };
+    expect(practiceExclusions(two, null, byId)).toEqual([]);
   });
 });
