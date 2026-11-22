@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MIN_RADIUS, PEER_RADIUS, relativeRadius } from './radarScale';
+import { MIN_RADIUS, PEER_RADIUS, bandOpacity, radarSummary, relativeRadius } from './radarScale';
 
 describe('relativeRadius (the report radar, relative to players at your rating)', () => {
   it('radarEqualRatesSitExactlyOnTheHexagon', () => {
@@ -65,5 +65,49 @@ describe('relativeRadius (the report radar, relative to players at your rating)'
     for (const [you, them] of rows) {
       expect(Math.abs(relativeRadius(you, them) - PEER_RADIUS)).toBeLessThan(0.05);
     }
+  });
+});
+
+describe('bandOpacity (where you likely are, quieter when it pokes far outside the hexagon)', () => {
+  it('radarBandFullStrengthInsideTheHexagon', () => {
+    for (const outer of [MIN_RADIUS, 0.4, PEER_RADIUS]) expect(bandOpacity(outer)).toBe(1);
+  });
+
+  it('radarBandFadesTheFurtherItPokesOut', () => {
+    let last = 1;
+    for (let outer = PEER_RADIUS; outer <= 1; outer += 0.01) {
+      const o = bandOpacity(outer);
+      expect(o).toBeLessThanOrEqual(last);
+      expect(o).toBeGreaterThanOrEqual(0.35);
+      last = o;
+    }
+    expect(bandOpacity(1)).toBe(0.35);
+    // Real data: "When you're behind" (you likely 2.9% to 5.3%, them 4.2%) reaches over halfway to
+    // the rim, so its band is drawn quieter than the point; "Middlegames" barely leaves the hexagon.
+    expect(bandOpacity(relativeRadius(2.9, 4.2))).toBeLessThan(0.5);
+    expect(bandOpacity(relativeRadius(19.0, 19.7))).toBeGreaterThan(0.9);
+  });
+});
+
+describe('radarSummary (the chart in words, for screen readers)', () => {
+  it('radarSummaryNamesOutsideAndInside', () => {
+    const text = radarSummary([
+      { area: 'Openings', label: 'notYourProblem', you: 9.6, them: 9.0 },
+      { area: 'Endgames', label: 'gap', you: 10.9, them: 7.9 },
+      { area: "When you're behind", label: 'notYourProblem', you: 4.1, them: 4.2 },
+      { area: 'Middlegames', label: 'noClearDifference', you: 19.7, them: 19.7 },
+      { area: 'Low on the clock', label: 'notEnoughData', you: null, them: null },
+    ]);
+    expect(text).toContain('Outside it, fewer serious mistakes than them: When you\'re behind.');
+    expect(text).toContain('Inside it, more: Openings, Endgames.');
+    expect(text).toContain('Level with them: Middlegames.');
+    expect(text).toContain('Not enough games: Low on the clock.');
+    expect(text).toContain('Endgames: you 10.9%, them 7.9%, weak spot');
+    expect(text).toContain('Middlegames: you 19.7%, them 19.7%, too close to call');
+    expect(text).not.toMatch(/\bCI\b|bootstrap|p-value|confidence/i);
+    // Empty groups are not mentioned.
+    const allOut = radarSummary([{ area: 'Openings', label: 'notYourProblem', you: 5, them: 9 }]);
+    expect(allOut).not.toContain('Inside');
+    expect(allOut).not.toContain('Not enough games');
   });
 });

@@ -5,6 +5,7 @@ import { parseCoachView, type CoachView } from '../../src/server/views';
 import { AnswerBoard } from './AnswerBoard';
 import { QuestionBoard } from './QuestionBoard';
 import { ReportCard, type Display } from './ReportCard';
+import { StatusCard } from './StatusCard';
 import { errorText, resultText } from './shared';
 import './widget.css';
 
@@ -18,9 +19,10 @@ interface WidgetProps {
 }
 
 function Widget({ app, status, display, onDisplayMode }: WidgetProps) {
-  const report = status.kind === 'ready' && status.view.kind === 'report';
+  // The report and the status card paint their own card, edge to edge.
+  const card = status.kind === 'ready' && (status.view.kind === 'report' || status.view.kind === 'status');
   return (
-    <div className={report ? 'pg-wrap pg-wrap--report' : 'pg-wrap'}>
+    <div className={card ? 'pg-wrap pg-wrap--report' : 'pg-wrap'}>
       {status.kind === 'waiting' && <p className="pg-p pg-muted">Waiting for the coach…</p>}
       {status.kind === 'error' && <p className="pg-p pg-error">Board error: {status.message}</p>}
       {status.kind === 'ready' && status.view.kind === 'answer' && <AnswerBoard view={status.view} />}
@@ -28,6 +30,7 @@ function Widget({ app, status, display, onDisplayMode }: WidgetProps) {
       {status.kind === 'ready' && status.view.kind === 'report' && (
         <ReportCard app={app} view={status.view} display={display} onDisplayMode={onDisplayMode} />
       )}
+      {status.kind === 'ready' && status.view.kind === 'status' && <StatusCard view={status.view} />}
     </div>
   );
 }
