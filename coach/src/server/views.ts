@@ -3,11 +3,8 @@
  * coach's data. Every tool linked to BOARD_URI returns one CoachView as `structuredContent`;
  * the widget switches on `kind`.
  *
- * The report card is v4 (spec §6c, "Where your points go"). The v3 report (areas against
- * players at your rating) is still emitted by the deprecated `toReportView(d, headline, …)`
- * overload, because tools.ts and its tests pin that shape until P3 rewires them;
- * `parseCoachView` turns such a report into a v4 view for the widget. P3 removes the legacy
- * overload, the Legacy* types and the parser's legacy branch.
+ * The report card is v4 (spec §6c, "Where your points go"). Its lesson boards carry no answer,
+ * and a quick fix carries its best move only once the player has tried that board.
  *
  * No runtime imports from node: the widget bundles this file for `parseCoachView`.
  */
@@ -15,24 +12,10 @@ import type { Color } from '../../../src/types';
 import type { PositionFacts } from '../coaching/positionFacts';
 import type { BoardView } from './boardResource';
 
-export type ReportLabel = 'gap' | 'notYourProblem' | 'noClearDifference' | 'notEnoughData';
-
-export interface ReportRow {
-  /** Plain-English name of the area, e.g. "Endgames". */
-  area: string;
-  label: ReportLabel;
-  /** % of the player's moves in this area that were serious mistakes (mistake or blunder). */
-  you: number | null;
-  /** The same % for players at their rating (the opponents in the same games). */
-  them: number | null;
-  /** Where the player's own % likely lies, on the same scale as `you`. */
-  range: [number, number] | null;
-  games: number;
-}
-
 /**
- * One position the player keeps getting wrong, shown on the report card as a "mission": a
- * small board with their usual wrong move (red) and the best move (green).
+ * One position the player keeps getting wrong, deep-checked (coaching/reportPositions): their
+ * usual wrong moves and the deep best move. The card shows it as a quick fix
+ * (quickFixFromPosition), with the best move only once the player has tried that board.
  */
 export interface ReportPosition {
   /** The position before the move, as a full FEN. */
@@ -55,25 +38,6 @@ export interface ReportPosition {
   opening: string | null;
   drillsDone: number;
   drillsTotal: number;
-}
-
-/**
- * @deprecated The v3 report card (areas against players at your rating). Still what the old
- * `toReportView(d, headline, extras)` returns for tools.ts until P3; the widget shows it as v4.
- */
-export interface LegacyReportView {
-  kind: 'report';
-  headline: string;
-  /** One plain sentence under the headline. */
-  subhead?: string;
-  games: number;
-  timeClass: string;
-  rows: ReportRow[];
-  focus: string | null;
-  /** This week's focus positions (at most MAX_REPORT_POSITIONS). */
-  positions?: ReportPosition[];
-  /** The training button's label; the widget defaults to DEFAULT_REPORT_CTA. */
-  cta?: string;
 }
 
 /** The big plain sentence at the top of the card, and one line under it. */
@@ -168,36 +132,9 @@ export type CoachView =
   | ReportView
   | StatusView;
 
-/** What `toReportView` adds to the diagnosis: the words under the headline, the missions, the button. */
-export interface ReportExtras {
-  subhead?: string;
-  positions?: ReportPosition[];
-  cta?: string;
-}
-
 /**
- * The fields of B4's `Diagnosis` that the report card reads. Declared here structurally so
- * the widget branch doesn't depend on the diagnosis code; a real `Diagnosis` is assignable.
- */
-export interface DiagnosisLike {
-  timeClass: string;
-  games: number;
-  areas: {
-    area: string;
-    label: ReportLabel;
-    myRate: number; // % of moves that were mistake or blunder
-    oppRate: number;
-    gapPts: number; // myRate − oppRate
-    ci95: [number, number]; // range of the gap, percentage points
-    ciAdj?: [number, number]; // the adjusted range that decides `gap`; preferred when present
-    games: number;
-  }[];
-  focus: { kind: 'area'; area: string } | { kind: 'repeated'; keys: string[] } | null;
-}
-
-/**
- * The fields of P1's `LeakReport` that the v4 card reads, declared structurally (like
- * DiagnosisLike) so this file doesn't import the diagnosis code; a real LeakReport is assignable.
+ * The fields of P1's `LeakReport` that the v4 card reads, declared structurally so this file
+ * (bundled by the widget) doesn't import the diagnosis code; a real LeakReport is assignable.
  */
 export interface LeakReportLike {
   timeClass: string;
@@ -237,10 +174,6 @@ export interface ReportV4Extras {
   cta?: string;
 }
 
-/** The report card never shows more rows than this (spec §6b: keep it simple). */
-export const MAX_REPORT_ROWS = 6;
-/** At most this many focus positions ("missions") a week. */
-export const MAX_REPORT_POSITIONS = 3;
 /** At most this many usual wrong moves per position. */
 export const MAX_WRONG_MOVES = 4;
 /** The longest training-button label the widget accepts. */
@@ -264,8 +197,6 @@ const MAX_DETAIL_TEXT = 120;
 const MAX_CONTEXT_TEXT = 300;
 const MAX_TIMES_TEXT = 60;
 const MAX_TIME_CLASS = 40;
-
-const round1 = (x: number) => Math.round(x * 10) / 10;
 
 /** A move the student tried on the question board (C1b's coach_check_move passes it in). */
 export interface Attempt {
@@ -330,116 +261,14 @@ export function toQuestionView(f: PositionFacts, prompt: string): CoachView {
   return { kind: 'question', fen: f.fenBefore, orientation: f.mover, gameId: f.gameId, ply: f.ply, prompt };
 }
 
-const AREA_NAMES: Record<string, string> = {
-  opening: 'Openings',
-  middlegame: 'Middlegames',
-  endgame: 'Endgames',
-  converting: "When you're ahead",
-  defending: "When you're behind",
-  timePressure: 'Low on the clock',
-};
-
-const AREA_FOCUS: Record<string, string> = {
-  opening: 'your openings',
-  middlegame: 'your middlegames',
-  endgame: 'your endgames',
-  converting: "finishing off games when you're ahead",
-  defending: "holding on when you're behind",
-  timePressure: "your moves when you're low on the clock",
-};
-
-/** "rookEndgames" → "Rook endgames", for an area key without a hand-written name. */
-function humanize(key: string): string {
-  const words = key.replace(/[_-]+/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().trim();
-  return words.charAt(0).toUpperCase() + words.slice(1);
-}
-
-const LABEL_ORDER: Record<ReportLabel, number> = { gap: 0, notYourProblem: 1, noClearDifference: 2, notEnoughData: 3 };
-
-/**
- * The report card: at most six areas in plain words, the player's serious-mistake rate
- * against players at their rating with the likely range, and the week's focus.
- *
- * Rows are ordered gap first (the surest gap first), then "not a weak spot", "too close to
- * call" and "not enough games", so the row cap only ever drops the least informative rows.
- * The likely range is the gap's range moved onto the player's own rate (them + range), so
- * a gap row's band sits wholly above the "them" mark. Rows with too few games show no
- * numbers at all.
- *
- * `extras` adds the sentence under the headline, up to three focus positions and the button
- * label. A position that `parseCoachView` would refuse is dropped here (the others stay), so
- * the widget never gets a report it can't show; the same goes for a button label that is
- * empty or too long (it is left out and the widget's default applies). The win-chance loss is
- * rounded to 0.1.
- */
-function legacyReportView(d: DiagnosisLike, headline: string, extras: ReportExtras): LegacyReportView {
-  const lowEnd = (a: DiagnosisLike['areas'][number]) => (a.ciAdj ?? a.ci95)[0];
-  const sorted = d.areas
-    .map((a, i) => ({ a, i }))
-    .sort(
-      (x, y) =>
-        LABEL_ORDER[x.a.label] - LABEL_ORDER[y.a.label] ||
-        (x.a.label === 'gap' ? lowEnd(y.a) - lowEnd(x.a) : 0) ||
-        x.i - y.i,
-    )
-    .slice(0, MAX_REPORT_ROWS);
-
-  const rows: ReportRow[] = sorted.map(({ a }) => {
-    const name = AREA_NAMES[a.area] ?? humanize(a.area);
-    if (a.label === 'notEnoughData') {
-      return { area: name, label: a.label, you: null, them: null, range: null, games: a.games };
-    }
-    const [lo, hi] = a.ciAdj ?? a.ci95;
-    return {
-      area: name,
-      label: a.label,
-      you: round1(a.myRate),
-      them: round1(a.oppRate),
-      range: [round1(Math.max(0, a.oppRate + lo)), round1(Math.max(0, a.oppRate + hi))],
-      games: a.games,
-    };
-  });
-
-  let focus: string | null = null;
-  if (d.focus?.kind === 'area') {
-    focus = AREA_FOCUS[d.focus.area] ?? humanize(d.focus.area).toLowerCase();
-  } else if (d.focus?.kind === 'repeated') {
-    const n = d.focus.keys.length;
-    focus = n === 1 ? 'the position you keep getting wrong' : `the ${n} positions you keep getting wrong`;
-  }
-
-  const view: LegacyReportView = { kind: 'report', headline, games: d.games, timeClass: d.timeClass, rows, focus };
-  if (extras.subhead !== undefined) view.subhead = extras.subhead;
-  if (extras.positions !== undefined) {
-    view.positions = extras.positions
-      .filter(isPosition)
-      .slice(0, MAX_REPORT_POSITIONS)
-      .map((p) => ({ ...p, wrongSan: [...p.wrongSan], lossPts: round1(p.lossPts) }));
-  }
-  if (isCta(extras.cta)) view.cta = extras.cta; // otherwise the widget's default label applies
-  return view;
-}
-
 /**
  * The report card v4 (spec §6c) from a leak report: the hero sentence, the ranked bars of where
  * the points go, one context line, this week's lesson (boards with no answers, the drill count
  * and, for "Keep the win", the rough what-if), quick fixes with hidden answers, and the button.
  * See reportV4 for the rules.
  */
-export function toReportView(r: LeakReportLike, extras?: ReportV4Extras): ReportView;
-/**
- * @deprecated The v3 card for tools.ts until P3 rewires it: at most six areas in plain words,
- * the player's serious-mistake rate against players at their rating with the likely range,
- * and the week's focus (see legacyReportView). The widget shows it as a minimal v4 card.
- */
-export function toReportView(d: DiagnosisLike, headline: string, extras?: ReportExtras): LegacyReportView;
-export function toReportView(
-  a: LeakReportLike | DiagnosisLike,
-  b?: string | ReportV4Extras,
-  c?: ReportExtras,
-): ReportView | LegacyReportView {
-  if (typeof b === 'string') return legacyReportView(a as DiagnosisLike, b, c ?? {});
-  return reportV4(a as LeakReportLike, b ?? {});
+export function toReportView(r: LeakReportLike, extras: ReportV4Extras = {}): ReportView {
+  return reportV4(r, extras);
 }
 
 const plural = (n: number, word: string, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
@@ -531,7 +360,7 @@ function conversionContext(c: LeakReportLike['conversion']): string {
 
 const round5 = (x: number) => Math.round(x / 5) * 5;
 
-/** A quick fix from a repeated position (P3 and the legacy card use it). The answer is kept only once revealed. */
+/** A quick fix from a repeated position. The answer is kept only once revealed. */
 export function quickFixFromPosition(p: ReportPosition, revealed: boolean): QuickFix {
   return {
     fen: p.fen,
@@ -638,44 +467,6 @@ function reportV4(r: LeakReportLike, x: ReportV4Extras): ReportView {
   return view;
 }
 
-/** Cuts text to `max` characters, ending with "…" when it had to cut. */
-const fit = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, max - 1)}…`);
-
-/**
- * @deprecated A v3 report shown on the v4 card (until P3): the headline and subhead become the
- * hero, the focus words the lesson title, and the positions quick fixes with their answers
- * hidden. The area rows are not shown (the radar is gone).
- */
-export function legacyReportToV4(v: LegacyReportView): ReportView {
-  const positions = v.positions ?? [];
-  const done = positions.reduce((n, p) => n + p.drillsDone, 0);
-  const total = positions.reduce((n, p) => n + p.drillsTotal, 0);
-  const title = fit(v.focus ? `${v.focus.charAt(0).toUpperCase()}${v.focus.slice(1)}` : 'No single focus yet', MAX_LABEL_TEXT);
-  // Over-long text is cut to fit rather than refusing the whole card.
-  const out: ReportView = {
-    kind: 'report',
-    games: v.games,
-    timeClass: fit(v.timeClass, MAX_TIME_CLASS),
-    hero: { headline: fit(v.headline, MAX_HERO_TEXT), sub: fit(v.subhead ?? '', MAX_HERO_TEXT) },
-    leaks: [],
-    focus: {
-      title,
-      line: positions.length > 0 ? 'Positions you keep reaching and getting wrong. Try each one before you see the answer.' : '',
-      positions: [],
-      drillsDone: done,
-      drillsTotal: total,
-    },
-  };
-  if (positions.length > 0) {
-    out.quickFixes = positions.slice(0, MAX_QUICK_FIXES).map((p) => {
-      const q = quickFixFromPosition(p, false);
-      return { ...q, label: fit(q.label, MAX_LABEL_TEXT), times: fit(q.times, MAX_TIMES_TEXT) };
-    });
-  }
-  if (v.cta !== undefined) out.cta = v.cta;
-  return out;
-}
-
 /** Cuts text to MAX_STATUS_TEXT characters, ending with "…" when it had to cut. */
 const fitStatus = (text: string) => (text.length <= MAX_STATUS_TEXT ? text : `${text.slice(0, MAX_STATUS_TEXT - 1)}…`);
 
@@ -700,7 +491,6 @@ const isNum = (x: unknown): x is number => typeof x === 'number' && Number.isFin
 const isStrOrNull = (x: unknown) => x === null || isStr(x);
 const isNumOrNull = (x: unknown) => x === null || isNum(x);
 const isColor = (x: unknown): x is Color => x === 'white' || x === 'black';
-const isLabel = (x: unknown): x is ReportLabel => isStr(x) && Object.hasOwn(LABEL_ORDER, x);
 
 function isAnswer(v: Obj): boolean {
   return (
@@ -719,18 +509,6 @@ function isAnswer(v: Obj): boolean {
 
 function isQuestion(v: Obj): boolean {
   return isStr(v.fen) && isColor(v.orientation) && isStr(v.gameId) && isNum(v.ply) && isStr(v.prompt);
-}
-
-function isRow(r: unknown): boolean {
-  return (
-    isObj(r) &&
-    isStr(r.area) &&
-    isLabel(r.label) &&
-    isNumOrNull(r.you) &&
-    isNumOrNull(r.them) &&
-    (r.range === null || (Array.isArray(r.range) && r.range.length === 2 && r.range.every(isNum))) &&
-    isNum(r.games)
-  );
 }
 
 const isCount = (x: unknown): x is number => isNum(x) && Number.isInteger(x) && x >= 0;
@@ -753,34 +531,6 @@ function isFen(x: unknown): x is string {
   return (
     ranks.length === 8 &&
     ranks.every((r) => [...r].reduce((n, c) => n + (c >= '1' && c <= '8' ? Number(c) : 1), 0) === 8)
-  );
-}
-
-function isPosition(p: unknown): p is ReportPosition {
-  return (
-    isObj(p) &&
-    isFen(p.fen) &&
-    isColor(p.orientation) &&
-    Array.isArray(p.wrongSan) &&
-    p.wrongSan.length >= 1 &&
-    p.wrongSan.length <= MAX_WRONG_MOVES &&
-    p.wrongSan.every((s) => isStr(s) && SAN.test(s)) &&
-    (p.wrongUci === null || (isStr(p.wrongUci) && UCI.test(p.wrongUci))) &&
-    isStr(p.bestSan) &&
-    SAN.test(p.bestSan) &&
-    isStr(p.bestUci) &&
-    UCI.test(p.bestUci) &&
-    isNum(p.lossPts) &&
-    p.lossPts >= 0 &&
-    p.lossPts <= 100 &&
-    isCount(p.wrongTimes) &&
-    isCount(p.seenTimes) &&
-    p.seenTimes >= 1 &&
-    p.wrongTimes <= p.seenTimes &&
-    isStrOrNull(p.opening) &&
-    isCount(p.drillsDone) &&
-    isCount(p.drillsTotal) &&
-    p.drillsDone <= p.drillsTotal
   );
 }
 
@@ -906,35 +656,12 @@ function isStatus(v: Obj): boolean {
   return isStatusText(v.title) && isStatusText(v.message) && (v.progress === undefined || isProgress(v.progress));
 }
 
-/** @deprecated The v3 report's shape (see LegacyReportView). */
-function isLegacyReport(v: Obj): boolean {
-  return (
-    isStr(v.headline) &&
-    isNum(v.games) &&
-    isStr(v.timeClass) &&
-    Array.isArray(v.rows) &&
-    v.rows.length <= MAX_REPORT_ROWS &&
-    v.rows.every(isRow) &&
-    isStrOrNull(v.focus) &&
-    (v.subhead === undefined || isStr(v.subhead)) &&
-    (v.positions === undefined ||
-      (Array.isArray(v.positions) && v.positions.length <= MAX_REPORT_POSITIONS && v.positions.every(isPosition))) &&
-    (v.cta === undefined || isCta(v.cta))
-  );
-}
-
 /**
  * Checks a tool result's `structuredContent`; returns null unless it is a well-formed CoachView.
- * A report comes back as a clean copy holding only known fields (cleanReportV4); a v3 report
- * (no `hero`) that checks out comes back as its v4 card (legacyReportToV4).
+ * A report comes back as a clean copy holding only known fields (cleanReportV4).
  */
 export function parseCoachView(x: unknown): CoachView | null {
   if (!isObj(x)) return null;
-  if (x.kind === 'report' && !('hero' in x)) {
-    if (!isLegacyReport(x)) return null;
-    const v4 = legacyReportToV4(x as unknown as LegacyReportView);
-    return isReportV4(v4 as unknown as Obj) ? cleanReportV4(v4) : null;
-  }
   if (x.kind === 'report') return isReportV4(x) ? cleanReportV4(x as unknown as ReportView) : null;
   const ok =
     (x.kind === 'answer' && isAnswer(x)) ||
