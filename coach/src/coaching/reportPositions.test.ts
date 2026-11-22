@@ -8,6 +8,7 @@ import type { Diagnosis } from '../diagnosis/diagnose';
 import { positionKey, type RepeatedPosition } from '../diagnosis/repeated';
 import { fixtureGame } from '../diagnosis/testGames';
 import { createDisplayEngine } from '../engine/displayEngine';
+import { toReportView } from '../server/views';
 import { buildReportPositions, commonOpening, openingName } from './reportPositions';
 import { emptyStudent, recordAttempt, startSession } from './student';
 
@@ -136,6 +137,10 @@ describe('buildReportPositions', () => {
     return { e, calls };
   }
 
+  // Deep losses (White's win %): with d4 White keeps evalToWinPct(60); after Bc4 / Na3 Black is +30 / +120.
+  const lossAfter = (blackCp: number) => evalToWinPct(60, null) - (100 - evalToWinPct(blackCp, null));
+  const DEEP_LOSS = Math.round(((2 * lossAfter(30) + lossAfter(120)) / 3) * 10) / 10;
+
   it('buildReportPositionsShapeAndDeepBest: the exact shape, the deep best, verified wrong moves, the opening and drills', async () => {
     let student = startSession(emptyStudent('alice'), null, 1);
     student = recordAttempt(student, { gameId: gA.game.id, ply: 4, moveSan: 'd4', correct: true, lossPts: 0 });
@@ -155,7 +160,7 @@ describe('buildReportPositions', () => {
         wrongUci: 'f1c4',
         bestSan: 'd4',
         bestUci: 'd2d4',
-        lossPts: 16, // (2 × 9 + 30) / 3, over the moves shown
+        lossPts: DEEP_LOSS, // the deep loss of the moves shown, averaged over the times each was played
         wrongTimes: 3,
         seenTimes: 4,
         opening: 'Italian Game',
@@ -167,6 +172,10 @@ describe('buildReportPositions', () => {
       ['bestSan', 'bestUci', 'drillsDone', 'drillsTotal', 'fen', 'lossPts', 'opening', 'orientation', 'seenTimes', 'wrongSan', 'wrongTimes', 'wrongUci'].sort(),
     );
     expect(JSON.stringify(out)).not.toContain('Bb5');
+    expect(DEEP_LOSS).not.toBe(16); // not the quick check's average
+    // The report view takes the positions as they are (its checks would drop a bad one).
+    const view = toReportView(d, 'h', { positions: out }) as { positions?: unknown[] };
+    expect(view.positions).toHaveLength(1);
     for (const c of calls) expect(c.ms).toBe(DISPLAY_CFG.movetimeMs);
     // The focus position is checked first; Q needs no search after its only move (it is the best).
     expect(calls[0].fen).toBe(P);

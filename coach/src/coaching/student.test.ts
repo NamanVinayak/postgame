@@ -27,7 +27,7 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-const A1 = { gameId: 'https://example.test/game/1', ply: 5, moveSan: 'Bc5', correct: true, lossPts: 0 };
+const A1 = { gameId: 'https://example.test/game/1', ply: 5, moveSan: 'Bc5', correct: true, lossPts: 0, key: 'k1' };
 const A2 = { gameId: 'https://example.test/game/2', ply: 31, moveSan: 'Rxe4', correct: false, lossPts: 14.2 };
 
 describe('student file', () => {
@@ -71,6 +71,29 @@ describe('student file', () => {
       expect(() => loadStudent(bad)).toThrow(/username/i);
     }
     expect(() => saveStudent({ ...emptyStudent('alice'), username: '../evil' })).toThrow(/username/i);
+  });
+
+  it('a malformed but valid JSON file loads what has the right shape, and the summary still works', () => {
+    mkdirSync(join(home, 'students'), { recursive: true });
+    const good = { gameId: 'g', ply: 3, moveSan: 'e5', correct: true, lossPts: 0 };
+    writeFileSync(
+      studentPath('alice'),
+      JSON.stringify({
+        username: 'alice',
+        sessions: [
+          { tried: 'oops', thinkingNotes: [1, 'missed a check'] },
+          5,
+          null,
+          { at: Date.UTC(2026, 10, 20), focus: 7, tried: [good, { bad: 1 }, { ...good, ply: -1 }], rule: ['x'] },
+        ],
+      }),
+    );
+    const s = loadStudent('alice');
+    expect(s.sessions).toEqual([
+      { at: 0, focus: null, tried: [], thinkingNotes: ['missed a check'], rule: null },
+      { at: Date.UTC(2026, 10, 20), focus: null, tried: [good], thinkingNotes: [], rule: null },
+    ]);
+    expect(lastSessionSummary(s)?.text).toBe('Last time (2026-11-20): 1 of 1 right.');
   });
 
   it('keeps an unreadable file aside instead of overwriting it', () => {
@@ -121,6 +144,13 @@ describe('lastSessionSummary (for the warm-up)', () => {
     s = recordAttempt(s, A1);
     expect(lastSessionSummary(s, 1)?.text).toContain('Last time (2026-11-18): 0 of 1 right.');
     expect(lastSessionSummary(s)?.text).toContain('Last time (2026-11-22): 1 of 1 right.');
+  });
+
+  it('counts only the first try at each board', () => {
+    let s = startSession(emptyStudent('alice'), null, day(18));
+    s = recordAttempt(s, { gameId: 'g1', ply: 4, moveSan: 'h6', correct: false, lossPts: 12, key: 'K' });
+    s = recordAttempt(s, { gameId: 'g2', ply: 8, moveSan: 'Bc5', correct: true, lossPts: 0, key: 'K' }); // same board, after the answer
+    expect(lastSessionSummary(s)?.text).toBe('Last time (2026-11-18): 0 of 1 right.');
   });
 
   it('is null for a first session', () => {

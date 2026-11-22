@@ -4,7 +4,7 @@
  *
  * Everything shown or named comes from a deep search (a `DisplayEngine`); the cached quick
  * analysis only proposes candidates. A position is only asked if the deep check agrees that
- * the game move was a real mistake there.
+ * the game move really went wrong there (`isTeachable`).
  */
 import { Chess, type Move } from 'chess.js';
 import { evalToWinPct } from '../../../src/analysis/winPct';
@@ -18,7 +18,8 @@ import type { DisplayEngine } from '../engine/displayEngine';
 import type { Attempt } from '../server/views';
 import { deepDisagrees, deepPositionFacts, isSerious, lineSan, ownGames, positionFacts, repeatedRefs, uciOf } from './explain';
 import type { PositionFacts } from './positionFacts';
-import type { StudentFile } from './student';
+import { commonOpening, openingFamily, openingName } from './openings';
+import type { Attempted, StudentFile, StudentSession } from './student';
 
 export type { Attempt } from '../server/views';
 
@@ -49,6 +50,16 @@ export function parseAttempt(fen: string, move: string): Move | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * The tried move in the position before `ply` of a cached game, without any search: null when
+ * it isn't legal there (or is ambiguous, e.g. "Nd2" when two knights can go), or the ply isn't
+ * in the game.
+ */
+export function legalAttempt(c: CachedGame, ply: number, moveSan: string): Move | null {
+  const fen = gamePlies(c)?.[ply]?.fenBefore;
+  return fen ? parseAttempt(fen, moveSan) : null;
 }
 
 /**
@@ -138,25 +149,35 @@ export async function checkMove(c: CachedGame, ply: number, moveSan: string, eng
 }
 
 /**
- * Worth asking: on the deep check the game move is still a mistake or a blunder (so it lost at
- * least DELTA.mistake, more than REPEAT_CFG.wrongLossPts, and `checkMove` calls it wrong too),
- * and it is not the deep best move. A quick-check mistake the deep check clears
- * (`deepDisagrees`) is never asked; neither is a move that is only an inaccuracy at depth.
+ * What a practice candidate is, which decides how it is checked:
+ * - 'repeated': a position the player keeps reaching and keeps getting wrong (the diagnosis's
+ *   repeated positions; one sighting stands for the position);
+ * - 'mistake': one move the quick check called a mistake or blunder.
  */
-export function isTeachable(quick: Classification, deep: PositionFacts): boolean {
-  return (
-    !deepDisagrees(quick, deep.classification) &&
-    isSerious(deep.classification) &&
-    deep.bestUci !== null &&
-    deep.winBefore - deep.winAfter > REPEAT_CFG.wrongLossPts
-  );
+export type PracticeKind = 'repeated' | 'mistake';
+
+export interface PracticeRef extends Ref {
+  kind: PracticeKind;
 }
 
-/** Right answers, each in a different session, after which a board counts as learned. */
+/**
+ * Worth asking, judged on the deep check. For both kinds the game move must not be the deep
+ * best move and must lose more than REPEAT_CFG.wrongLossPts: the line `checkMove` uses, so
+ * the game move itself would be scored wrong. A 'mistake' must also still be a mistake or a
+ * blunder at depth: never one the deep check clears (`deepDisagrees`), nor one that is only
+ * an inaccuracy there. A 'repeated' position needs only the first rule, the same line that
+ * makes a move count as wrong there.
+ */
+export function isTeachable(kind: PracticeKind, quick: Classification, deep: PositionFacts): boolean {
+  if (deep.bestUci === null || deep.winBefore - deep.winAfter <= REPEAT_CFG.wrongLossPts) return false;
+  return kind === 'repeated' || (!deepDisagrees(quick, deep.classification) && isSerious(deep.classification));
+}
+
+/** Sessions whose first try at a board was right, after which the board counts as learned. */
 export const DRILLS_PER_POSITION = 3;
 
-/** The board (position key) at a game's ply, from `games` or else the cache; null if unknown. */
-function boardKeyFinder(games: Map<string, CachedGame>): (gameId: string, ply: number) => string | null {
+/** Finds the board (position key) at a game's ply, from `games` or else the cache; null if unknown. */
+export function boardKeyFinder(games: Map<string, CachedGame>): (gameId: string, ply: number) => string | null {
   const known = new Map<string, string | null>();
   return (gameId, ply) => {
     const k = refKey(gameId, ply);
@@ -169,19 +190,30 @@ function boardKeyFinder(games: Map<string, CachedGame>): (gameId: string, ply: n
   };
 }
 
+type KeyOf = (gameId: string, ply: number) => string | null;
+const boardOf = (t: Attempted, keyOf: KeyOf) => t.key ?? keyOf(t.gameId, t.ply);
+
+/** True when the session already holds a try at this board: only the first try at a position counts. */
+export function triedBoard(session: StudentSession, key: string, keyOf: KeyOf): boolean {
+  return session.tried.some((t) => boardOf(t, keyOf) === key);
+}
+
 /**
- * For each board (position key), the indexes of the student's sessions with a right answer
- * there; the same board reached in another game counts as the same board.
+ * For each board (position key), the indexes of the student's sessions whose FIRST try at that
+ * board was right. The same board reached in another game is the same board. A right answer
+ * after a wrong one in the same session doesn't count: the answer had been shown by then.
  */
 export function rightSessionsByBoard(student: StudentFile | undefined, games: Map<string, CachedGame>): Map<string, Set<number>> {
   const out = new Map<string, Set<number>>();
   if (!student) return out;
   const keyOf = boardKeyFinder(games);
   student.sessions.forEach((s, i) => {
+    const seen = new Set<string>();
     for (const t of s.tried) {
+      const key = boardOf(t, keyOf);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
       if (!t.correct) continue;
-      const key = keyOf(t.gameId, t.ply);
-      if (!key) continue;
       if (!out.has(key)) out.set(key, new Set());
       out.get(key)!.add(i);
     }
@@ -191,8 +223,8 @@ export function rightSessionsByBoard(student: StudentFile | undefined, games: Ma
 
 /**
  * What practice leaves out, from the student file (as refKeys): everything tried in the
- * running session (`current`, its index), and boards already answered right in
- * DRILLS_PER_POSITION different sessions. A board got wrong, or right fewer times, comes back
+ * running session (`current`, its index), and boards learned (first try right in
+ * DRILLS_PER_POSITION different sessions). A board got wrong, or right fewer times, comes back
  * in a later session: that spacing is the point of practice.
  */
 export function practiceExclusions(student: StudentFile, current: number | null, games: Map<string, CachedGame>): string[] {
@@ -201,7 +233,7 @@ export function practiceExclusions(student: StudentFile, current: number | null,
   const out: string[] = [];
   student.sessions.forEach((s, i) => {
     for (const t of s.tried) {
-      const key = keyOf(t.gameId, t.ply);
+      const key = boardOf(t, keyOf);
       const learned = key !== null && (right.get(key)?.size ?? 0) >= DRILLS_PER_POSITION;
       if (i === current || learned) out.push(refKey(t.gameId, t.ply));
     }
@@ -210,50 +242,66 @@ export function practiceExclusions(student: StudentFile, current: number | null,
 }
 
 /**
- * The first of `refs` worth asking, deep-checking them in order (at most `maxChecks` deep
- * checks, about 3 s each). `skipped` lists the refs passed over: games not in the cache or not
- * replayable, and positions the deep check cleared. Search failures are thrown.
+ * The first of `refs` worth asking (`isTeachable`, by each ref's kind; 'mistake' when none is
+ * given), deep-checking them one at a time in order, at most `maxChecks` (about 3 s each).
+ * `skipped` lists the refs passed over: games not in the cache or not replayable, and
+ * positions the deep check cleared. Search failures are thrown.
  */
 export async function firstTeachable(
-  refs: Ref[],
+  refs: (Ref & { kind?: PracticeKind })[],
   load: (gameId: string) => CachedGame | null,
   deep: (c: CachedGame, ply: number) => Promise<PositionFacts>,
   maxChecks: number,
-): Promise<{ found: { c: CachedGame; ply: number; facts: PositionFacts } | null; skipped: Ref[] }> {
+): Promise<{ found: { c: CachedGame; ply: number; facts: PositionFacts; kind: PracticeKind } | null; skipped: Ref[] }> {
   const skipped: Ref[] = [];
   let checks = 0;
   for (const ref of refs) {
     const c = load(ref.gameId);
     const quick = c?.analysis.plies[ref.ply]?.classification;
     if (!c || !quick || !gamePlies(c)?.[ref.ply]) {
-      skipped.push(ref);
+      skipped.push({ gameId: ref.gameId, ply: ref.ply });
       continue;
     }
     if (checks >= maxChecks) break;
     checks++;
+    const kind = ref.kind ?? 'mistake';
     const facts = await deep(c, ref.ply);
-    if (isTeachable(quick, facts)) return { found: { c, ply: ref.ply, facts }, skipped };
-    skipped.push(ref);
+    if (isTeachable(kind, quick, facts)) return { found: { c, ply: ref.ply, facts, kind }, skipped };
+    skipped.push({ gameId: ref.gameId, ply: ref.ply });
   }
   return { found: null, skipped };
 }
 
-type Pick = { gameId: string; ply: number; key: string; loss: number };
+/** The opening top-up only takes mistakes up to this move number. */
+export const OPENING_TOPUP_MOVES = 15;
+
+type Pick = { gameId: string; ply: number; key: string; loss: number; kind: PracticeKind };
 
 const worstFirst = (a: Pick, b: Pick) => b.loss - a.loss || a.gameId.localeCompare(b.gameId) || a.ply - b.ply;
 
+/** Each game's worst first (worst of those first), then each game's second worst, and so on: one bad game can't fill the list. */
+function roundRobin(perGame: Pick[][]): Pick[] {
+  const lists = perGame.map((l) => [...l].sort(worstFirst));
+  const out: Pick[] = [];
+  const deepest = Math.max(0, ...lists.map((l) => l.length));
+  for (let rank = 0; rank < deepest; rank++) out.push(...lists.flatMap((l) => (l[rank] ? [l[rank]] : [])).sort(worstFirst));
+  return out;
+}
+
 /**
- * Up to `n` more of the player's own positions with the same pattern as the diagnosis focus,
- * in the order to ask them. Candidates only: ask them through `firstTeachable`.
- * - Focus area: the player's serious mistakes in that area. Each game's worst first (worst
- *   of those first), then each game's second worst, and so on, so one bad game can't fill it.
- * - Focus repeated positions: one reference per position (the sighting that lost the most),
- *   the focus positions first, then the other repeated positions.
+ * The player's practice positions for the diagnosis focus, in the order to ask them (up to
+ * `n`). Candidates only: ask them through `firstTeachable`, which deep-checks each by its kind.
+ * - Focus area: the player's serious mistakes in that area ('mistake'), round-robin by game.
+ * - Focus repeated positions ('repeated', one reference each: the sighting that lost the
+ *   most): the focus positions first; then, to top up, the player's other repeated positions;
+ *   then the player's quick-check mistakes and blunders ('mistake') in the first
+ *   OPENING_TOPUP_MOVES moves of games in the same opening family as the focus positions
+ *   (e.g. "Sicilian Defense"), round-robin by game.
  * - No focus: none.
  * Never a position listed in `exclude` ("<gameId>#<ply>", see `refKey`), nor the same board
  * as one of them, and never the same board twice.
  */
-export function samePatternPositions(d: Diagnosis, games: CachedGame[], exclude: string[], n: number): Ref[] {
+export function samePatternPositions(d: Diagnosis, games: CachedGame[], exclude: string[], n: number): PracticeRef[] {
   const focus = d.focus;
   if (!focus || n <= 0) return [];
   const own = ownGames(d, games);
@@ -267,18 +315,18 @@ export function samePatternPositions(d: Diagnosis, games: CachedGame[], exclude:
     if (fact) excludedKeys.add(positionKey(fact.fenBefore));
   }
 
+  const mistakes = (keep: (p: PlyFact, c: CachedGame) => boolean, from = own) =>
+    roundRobin(
+      from.map(({ c, plies }) =>
+        plies
+          .filter((p) => p.mine && p.mistake && keep(p, c))
+          .map((p) => ({ gameId: c.game.id, ply: p.ply, key: positionKey(p.fenBefore), loss: p.lossPts, kind: 'mistake' as const })),
+      ),
+    );
+
   const ordered: Pick[] = [];
   if (focus.kind === 'area') {
-    const perGame = own.map(({ c, plies }) =>
-      plies
-        .filter((p) => p.mine && p.mistake && p.areas.includes(focus.area))
-        .map((p) => ({ gameId: c.game.id, ply: p.ply, key: positionKey(p.fenBefore), loss: p.lossPts }))
-        .sort(worstFirst),
-    );
-    const deepest = Math.max(0, ...perGame.map((l) => l.length));
-    for (let rank = 0; rank < deepest; rank++) {
-      ordered.push(...perGame.flatMap((l) => (l[rank] ? [l[rank]] : [])).sort(worstFirst));
-    }
+    ordered.push(...mistakes((p) => p.areas.includes(focus.area)));
   } else {
     const refs = repeatedRefs(d, games);
     const focusKeys = new Set(focus.keys);
@@ -287,16 +335,36 @@ export function samePatternPositions(d: Diagnosis, games: CachedGame[], exclude:
       ...focus.keys.flatMap((k) => order.filter((x) => x.r.key === k)),
       ...order.filter((x) => !focusKeys.has(x.r.key)),
     ];
-    for (const { r, ref } of sorted) if (ref) ordered.push({ ...ref, key: r.key, loss: r.avgLossPts });
+    for (const { r, ref } of sorted) if (ref) ordered.push({ ...ref, key: r.key, loss: r.avgLossPts, kind: 'repeated' });
+
+    // Top-up: early mistakes in games of the focus positions' opening families.
+    const byId = new Map(own.map((g) => [g.c.game.id, g.c]));
+    const familyOf = (c: CachedGame) => {
+      const name = openingName(c.game.pgn);
+      return name ? openingFamily(name) : null;
+    };
+    const families = new Set<string>();
+    for (const r of d.repeated.filter((x) => focusKeys.has(x.key))) {
+      const names = r.gameIds.map((id) => byId.get(id)).map((c) => (c ? openingName(c.game.pgn) : null));
+      const common = commonOpening(names.filter((x): x is string => x !== null));
+      if (common) families.add(openingFamily(common));
+    }
+    if (families.size > 0) {
+      const sameFamily = own.filter(({ c }) => {
+        const f = familyOf(c);
+        return f !== null && families.has(f);
+      });
+      ordered.push(...mistakes((p) => Math.floor(p.ply / 2) + 1 <= OPENING_TOPUP_MOVES, sameFamily));
+    }
   }
 
-  const out: Ref[] = [];
+  const out: PracticeRef[] = [];
   const used = new Set<string>();
   for (const p of ordered) {
     if (out.length >= n) break;
     if (excludedRefs.has(refKey(p.gameId, p.ply)) || excludedKeys.has(p.key) || used.has(p.key)) continue;
     used.add(p.key);
-    out.push({ gameId: p.gameId, ply: p.ply });
+    out.push({ gameId: p.gameId, ply: p.ply, kind: p.kind });
   }
   return out;
 }
