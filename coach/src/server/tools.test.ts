@@ -1133,6 +1133,19 @@ describe('coach_report', () => {
 });
 
 describe('keep the win', () => {
+  it('boardLineComesFromTheDeepCheckOnly', async () => {
+    // No prompt input: "You're winning here…" can't be put above a board the deep check doesn't call winning.
+    const client = await connect(deps(createRunner(NO_ENGINE, source([]))));
+    const { tools } = await client.listTools();
+    const ask = tools.find((t) => t.name === 'coach_ask_position');
+    expect(Object.keys((ask?.inputSchema as { properties?: object }).properties ?? {}).sort()).toEqual(['gameId', 'ply', 'username']);
+    // A prompt passed anyway is ignored: the italian position is not winning at depth.
+    writeCached(cachedItalian());
+    const asked = await connect(deps(createRunner(NO_ENGINE, source([])), deepEngine(BC5_BEFORE, NG5_AFTER)));
+    const res = await call(asked, 'coach_ask_position', { gameId: GAME_ID, ply: 5, prompt: "You're winning here. Find the move that keeps it." });
+    expect(res.structuredContent).toMatchObject({ kind: 'question', prompt: 'Find a better move here.' });
+  });
+
   it('keepTheWinQuestionHasNoAnswer', async () => {
     const kw = keepTheWinGames(1);
     const runner = createRunner(NO_ENGINE, source(kw.games.map((c) => c.game)));

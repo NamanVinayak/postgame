@@ -1059,27 +1059,19 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
         'a session. With them it asks that position: the warm-up from coach_student, or a position the player picked from ' +
         "their games (it must be the player's own move). Each position is checked with a deeper search first and only asked " +
         `if the game move really was a mistake there; at most ${MAX_DEEP_CHECKS} positions are checked per call, so this ` +
-        'can take a few seconds. When the board says no position is ready, there are no more, the move held up, or it is ' +
+        'can take a few seconds. The line above the board is "You\'re winning here. Find the move that keeps it." only when ' +
+        'the deeper check says the player is winning there, else "Find a better move here." When the board says no ' +
+        'position is ready, there are no more, the move held up, or it is ' +
         'enough for today, say so honestly. Never name or hint at a move or evaluation until coach_check_move has scored ' +
         "the player's try.",
       inputSchema: {
         gameId: z.string().min(1).optional().describe('Game id of a position to ask (with ply); leave out for the next practice position'),
         ply: z.number().int().min(0).optional().describe("0-based ply of the player's own move (with gameId)"),
-        prompt: z
-          .string()
-          .trim()
-          .min(1)
-          .max(200)
-          .optional()
-          .describe(
-            'The line above the board. Leave out for the default: "You\'re winning here. Find the move that keeps it." when ' +
-              'the deeper check says the player is winning there, else "Find a better move here."',
-          ),
         username: optionalUsername,
       },
       _meta: { ui: { resourceUri: BOARD_URI } },
     },
-    async ({ gameId, ply, prompt, username }) => {
+    async ({ gameId, ply, username }) => {
       if ((gameId === undefined) !== (ply === undefined)) {
         return failure('Give both gameId and ply, or neither (for the next practice position).');
       }
@@ -1091,9 +1083,11 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
       }
       const lesson = player ? lessons.get(player) : undefined;
       if (lesson) lessonSession(lesson);
+      // The line above the board comes from the deep check only (never from the caller), so
+      // "You're winning here" is never shown over a position that isn't winning at depth.
       const ask = (facts: PositionFacts) => {
         lesson?.asked.add(refKey(facts.gameId, facts.ply));
-        const line = prompt ?? lessonPrompt(facts);
+        const line = lessonPrompt(facts);
         return reply(questionText(facts, line), { ...toQuestionView(facts, line) });
       };
       /** The calm card for an ending (no board, no error), with the model's instructions in the text. */
