@@ -117,10 +117,11 @@ docs/superpowers/             Design spec and implementation plan
 
 ## How it was built
 
-I designed, directed and tested Postgame, and wrote it with Claude Code as my
-coding agent. The design spec and the step-by-step implementation plan it was
-built from are in `docs/superpowers/`. The analysis logic is covered by unit
-tests (`npm test`).
+Postgame was built with an agentic engineering workflow. I wrote the design spec
+and a step-by-step implementation plan (both in `docs/superpowers/`). AI coding
+agents implemented each step against that plan, and I reviewed, tested and
+debugged every change on real games until it held up. The analysis logic is
+covered by unit tests (`npm test`) that run in CI on every push.
 
 ## Credits & licensing
 
