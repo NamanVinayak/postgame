@@ -38,6 +38,7 @@ describe('openingName', () => {
       ['Kings-Pawn-Opening-Wayward-Queen-Attack', "King's Pawn Opening: Wayward Queen Attack"],
       ['Bishops-Opening', "Bishop's Opening"],
       ['Pirc-Defense-3.Nc3', 'Pirc Defense'],
+      ['Modern-Defense-with-1-d4', 'Modern Defense'],
     ];
     for (const [slug, name] of cases) expect(openingName(`[Event "Live Chess"]\n${ECO(slug)}\n\n1. e4 *`)).toBe(name);
   });
