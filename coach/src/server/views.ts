@@ -488,15 +488,14 @@ export function heroFromTimeLosses(t: LeakReportLike['timeLosses']): ReportHero 
 /**
  * Costly moves (a mistake or blunder: the win chance drops by 10 points or more) in natural
  * numbers: "About 2 costly moves per game" (1.5 or more a game, rounded), "About 1 costly move
- * per game" (0.75 to 1.5), "About 1 costly move every 2 games" (0.3 to 0.75), "About 1 costly
- * move every 5 games" (under 0.3: every round(1 ÷ x) games).
+ * per game" (0.75 to 1.5), and under 0.75 "About 1 costly move every N games" with
+ * N = max(2, round(1 ÷ x)), so 0.74 and 0.6 both say every 2 games, 0.35 and 0.3 say every 3.
  */
 export function costlyMovesText(perGame: number): string {
   if (!(perGame > 0)) return 'No costly moves here';
   if (perGame >= 1.5) return `About ${Math.round(perGame)} costly moves per game`;
   if (perGame >= 0.75) return 'About 1 costly move per game';
-  if (perGame >= 0.3) return 'About 1 costly move every 2 games';
-  return `About 1 costly move every ${Math.round(1 / perGame)} games`;
+  return `About 1 costly move every ${Math.max(2, Math.round(1 / perGame))} games`;
 }
 
 /**
