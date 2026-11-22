@@ -7,6 +7,11 @@ played, and an evaluation graph — without a paid subscription.
 You keep playing on Chess.com. Postgame is where you go afterward to understand
 what happened.
 
+> **What's next: Postgame Coach.** Claude + Stockfish as a personal coach that
+> reads all your games, finds the one thing actually holding you back, and drills
+> it in Postgame's Train section. It will be a local MCP server plus a Claude Code
+> skill that installs in one line. See the [roadmap](ROADMAP.md).
+
 > **Not affiliated with, endorsed by, or connected to Chess.com.** It reads only
 > your **public** games through Chess.com's public API — no password, no login,
 > no account on our side. This is an experimental, open-source project built for
