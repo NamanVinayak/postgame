@@ -69,6 +69,8 @@ async function main(): Promise<void> {
   registerCoachTools(server, {
     runner,
     display,
+    // Real searches only: the store on disk answers known positions without one.
+    displaySearches: () => boardSearchedBefore + (board?.positionsSearched() ?? 0),
     engineInfo() {
       const stockfishPath = loadLocalConfig().stockfishPath;
       return {

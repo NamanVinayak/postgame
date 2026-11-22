@@ -18,7 +18,7 @@ import { diagnose } from '../diagnosis/diagnose';
 import { leakReport, type LeakFocus } from '../diagnosis/leaks';
 import { positionKey } from '../diagnosis/repeated';
 import { fixtureGame, randomSans } from '../diagnosis/testGames';
-import { createDisplayEngine, type DisplayEngine } from '../engine/displayEngine';
+import { createDeepStore, createDisplayEngine, persistDisplayEngine, type DisplayEngine } from '../engine/displayEngine';
 import type { CoachGame, GameSource } from '../sources/types';
 import { BOARD_URI } from './boardResource';
 import { parseCoachView, type ReportView } from './views';
@@ -110,6 +110,8 @@ function deps(runner: Runner, display: Engine | null = null): CoachDeps & { rese
       },
     },
     engineInfo: () => ENGINE_INFO,
+    // The fake engines record each search they really run (the memo above them answers repeats).
+    displaySearches: () => (display as { searched?: string[] } | null)?.searched?.length ?? 0,
   };
   return d;
 }
@@ -948,6 +950,25 @@ describe('first tries and sessions', () => {
     expect(text).not.toMatch(/\b5\.0\b|about 5%/);
     // The student file holds the same rounded-up loss.
     expect(loadStudent('alice').sessions[0].tried[0].lossPts).toBe(5.1);
+    // The board agrees: its position value is the shown best win chance, never the raw 55.50.
+    expect(res.structuredContent).toMatchObject({ kind: 'answer', winBefore: 55.6, winAfter: null });
+
+    // The try is the game move itself (...Nf6), losing 5.33 at depth: 53.86% → 48.53%, which whole numbers
+    // would show as 54% → 49%, a 5-point loss. Every channel shows one decimal, rounded so it reads over the line.
+    const gameMove = keyedEngine({
+      [FEN_BEFORE_5]: { cp: 42, mate: null, bestMoveUci: 'f8c5', secondBest: null, pvUci: ['f8c5'] },
+      [FEN_AFTER_5]: { cp: 16, mate: null, bestMoveUci: 'f3g5', secondBest: null, pvUci: ['f3g5'] },
+    });
+    const again = await connect(deps(createRunner(NO_ENGINE, source([])), gameMove));
+    const same = await call(again, 'coach_check_move', { gameId: GAME_ID, ply: 5, moveSan: 'Nf6' });
+    expect(same.structuredContent).toMatchObject({
+      kind: 'answer', correct: false, lossPts: 5.4, attemptWin: 48.5, bestWin: 53.9, winBefore: 53.9, winAfter: 48.5,
+    });
+    const caption = String(same.structuredContent?.caption);
+    expect(caption).toContain('Your win chance: 53.9% before this move, 48.5% after.');
+    expect(caption).not.toMatch(/54% before this move, 49% after/);
+    expect(textOf(same)).toContain('Not right: it loses about 5.4% win chance against the best move.');
+    expect(textOf(same)).toContain('Your move keeps about 48.5% win chance; the best move keeps 53.9%.');
     // Whole numbers could also read as within the line (57.4 and 51.8 round to 57 and 52): one decimal below a loss of 6.
     const facts = {
       gameId: GAME_ID, ply: 5, fenBefore: FEN_BEFORE_5, fenAfter: FEN_AFTER_5, mover: 'black' as const,
@@ -1061,9 +1082,9 @@ describe('coach_report', () => {
     const report = await call(client, 'coach_report', ALICE);
     const view = report.structuredContent as unknown as ReportView;
     expect(view.focus.title).toBe('Your first 10 moves');
-    // The position alice keeps getting wrong is this week's lesson board (no answer) and a quick fix (answer hidden).
+    // The position alice keeps getting wrong is this week's lesson board (no answer); it is not also a quick fix.
     expect(view.focus.positions).toEqual([{ fen: REP_FEN, orientation: 'white', prompt: 'Find a better move here.' }]);
-    expect(view.quickFixes).toMatchObject([{ wrongSan: ['Bc4', 'Na3'], revealed: false, bestSan: null, bestUci: null, label: 'Italian Game' }]);
+    expect(view.quickFixes).toEqual([]);
 
     for (const text of [textOf(diag), textOf(report)]) {
       expect(text).toContain("These are practice positions: don't name or show any move in them");
@@ -1077,18 +1098,68 @@ describe('coach_report', () => {
   });
 
   it('quickFixHiddenUntilTried', async () => {
+    // Keep the win as the focus: no lesson board shares the quick fix's board.
     const { games, engine } = repeatedFixture();
     const runner = createRunner(NO_ENGINE, source(games.map((c) => c.game)));
-    const client = await connect(deps(runner, engine));
+    const client = await connect({ ...deps(runner, engine), leakReport: withFocus({ kind: 'keepTheWin' }) });
     const before = (await call(client, 'coach_report', ALICE)).structuredContent as unknown as ReportView;
+    expect(before.focus.positions).toEqual([]);
     expect(before.quickFixes?.[0]).toMatchObject({ revealed: false, bestSan: null, bestUci: null });
     // The player tries that board (from any game that reached it): from now on its answer shows.
     await call(client, 'coach_check_move', { gameId: games[1].game.id, ply: 4, moveSan: 'Bc4' });
     const after = (await call(client, 'coach_report', ALICE)).structuredContent as unknown as ReportView;
     expect(after.quickFixes?.[0]).toMatchObject({ revealed: true, bestSan: 'd4', bestUci: 'd2d4' });
     expect(parseCoachView(after)).toEqual(after);
-    // And the try counts towards this week's drills (the board is in the focus pool).
-    expect(after.focus.drillsDone).toBe(1);
+    await runner.close();
+  });
+
+  it('quickFixNeverSharesABoardWithAQuestion', async () => {
+    // 1. The board is this card's lesson board ("your first 10 moves" focus): no quick fix for it.
+    const { games, engine } = repeatedFixture();
+    const runner = createRunner(NO_ENGINE, source(games.map((c) => c.game)));
+    const one = await connect(deps(runner, engine));
+    const card = (await call(one, 'coach_report', ALICE)).structuredContent as unknown as ReportView;
+    expect(card.focus.positions.map((p) => p.fen)).toEqual([REP_FEN]);
+    expect(card.quickFixes).toEqual([]);
+    // Tried in this session, it is no longer a lesson board: the quick fix comes back, its answer shown,
+    // and the try counts towards this week's drills (the board is in the focus pool).
+    await call(one, 'coach_check_move', { gameId: games[1].game.id, ply: 4, moveSan: 'Bc4' });
+    const tried = (await call(one, 'coach_report', ALICE)).structuredContent as unknown as ReportView;
+    expect(tried.focus.positions).toEqual([]);
+    expect(tried.quickFixes).toMatchObject([{ key: positionKey(REP_FEN), revealed: true, bestSan: 'd4' }]);
+    expect(tried.focus.drillsDone).toBe(1);
+
+    // 2. The next session re-asks that try as the warm-up: no quick fix for that board either (its
+    //    answer would sit next to the warm-up question), whatever the focus.
+    const next = await connect({ ...deps(runner, engine), leakReport: withFocus({ kind: 'keepTheWin' }) });
+    expect(textOf(await call(next, 'coach_student', { username: 'alice' }))).toContain(`Warm-up first: ask gameId ${games[1].game.id}, ply 4`);
+    const warm = (await call(next, 'coach_report', ALICE)).structuredContent as unknown as ReportView;
+    expect(warm.focus.positions).toEqual([]);
+    expect(warm.quickFixes).toEqual([]);
+    expect(JSON.stringify(warm)).not.toMatch(/d2d4|"d4"/);
+    await runner.close();
+  });
+
+  it('reportSearchBudgetIsSharedAndHonest', async () => {
+    // Ten keep-the-win positions that all hold up at depth, and a quick fix: one report call runs at
+    // most 20 searches in all, shows what is ready and says more gets ready next time.
+    const kw = keepTheWinGames(10, { heldUp: true });
+    const rep = repeatedFixture();
+    const runner = createRunner(NO_ENGINE, source([...kw.games, ...rep.games].map((c) => c.game)));
+    const engine = keyedEngine({ ...kw.evals, ...rep.evals });
+    const client = await connect({ ...deps(runner, engine), leakReport: withFocus({ kind: 'keepTheWin' }) });
+    const res = await call(client, 'coach_report', ALICE);
+    expect(engine.searched.length).toBeLessThanOrEqual(20);
+    expect(engine.searched).toHaveLength(19); // 8 lesson checks (16), then the quick fix's 3
+    const view = res.structuredContent as unknown as ReportView;
+    expect(view.focus.positions).toEqual([]);
+    expect(view.quickFixes).toHaveLength(1);
+    expect(textOf(res)).toContain('No lesson positions are ready on the card so far');
+    expect(textOf(res)).toContain('This call stopped at its limit of deeper searches (20 at most)');
+    // The next call goes on from there (known results are free) and checks the last two.
+    const again = await call(client, 'coach_report', ALICE);
+    expect(engine.searched).toHaveLength(23);
+    expect(textOf(again)).not.toContain('stopped at its limit');
     await runner.close();
   });
 
@@ -1174,6 +1245,58 @@ describe('keep the win', () => {
     await runner.close();
   });
 
+  it('leakAndClockBoardsGetThePlainPrompt', async () => {
+    // A clock-focus board (Black's clock was at 10 s) where the deep check says Black is winning (+4):
+    // from the pool it still gets the plain line; only keep-the-win positions say "You're winning here".
+    const c = cachedItalian();
+    c.game.clocks = c.game.clocks.map((x, i) => (i === 3 ? 10 : x));
+    writeCached(c);
+    const engine = keyedEngine({
+      [FEN_BEFORE_5]: { cp: 400, mate: null, bestMoveUci: 'f8c5', secondBest: null, pvUci: ['f8c5'] },
+      [FEN_AFTER_5]: { cp: 0, mate: null, bestMoveUci: 'f3g5', secondBest: null, pvUci: ['f3g5'] },
+    });
+    const runner = createRunner(NO_ENGINE, source([c.game]));
+    const client = await connect({ ...deps(runner, engine), leakReport: withFocus({ kind: 'clock' }) });
+    const card = (await call(client, 'coach_report', ALICE)).structuredContent as unknown as ReportView;
+    expect(card.focus.positions).toEqual([{ fen: FEN_BEFORE_5, orientation: 'black', prompt: 'Find a better move here.' }]);
+    const asked = await call(client, 'coach_ask_position', {});
+    expect(asked.structuredContent).toMatchObject({ kind: 'question', ply: 5, prompt: 'Find a better move here.' });
+    // Asked by reference (an example), the line follows the deep win %: winning there, so "keeps the win".
+    const byRef = await call(client, 'coach_ask_position', { gameId: GAME_ID, ply: 5 });
+    expect(byRef.structuredContent).toMatchObject({ prompt: "You're winning here. Find the move that keeps it." });
+    await runner.close();
+  });
+
+  it('storedDeepResultsCostNoBudgetAfterRestart', async () => {
+    // The production stack: the display engine keeps each complete search on disk. A restart forgets
+    // everything in memory, but positions read back from disk cost no search, so they don't use the budget.
+    const kw = keepTheWinGames(10, { heldUp: true });
+    const fake = keyedEngine(kw.evals);
+    const stockfish = {
+      evaluate: async (fen: string, ms: number) => ({ ...(await fake.evaluate(fen, ms)), capped: false }),
+      engineId: async () => 'fake-stockfish 1',
+      settings: () => ({ depth: 16, threads: 1, hashMb: 64, multiPv: 3 }),
+    };
+    const display = persistDisplayEngine(createDisplayEngine(() => stockfish), createDeepStore());
+    const stack = (runner: Runner): CoachDeps => ({
+      ...deps(runner),
+      display: { get: () => display, reset: () => undefined },
+      displaySearches: () => fake.searched.length,
+      leakReport: withFocus({ kind: 'keepTheWin' }),
+    });
+    const runner = createRunner(NO_ENGINE, source(kw.games.map((c) => c.game)));
+    const first = await connect(stack(runner));
+    await call(first, 'coach_diagnosis', ALICE);
+    expect((await call(first, 'coach_ask_position', {})).structuredContent).toMatchObject({ title: 'No position ready yet' });
+    expect(fake.searched).toHaveLength(16);
+    // After a restart: the first eight come from disk for free, the last two are searched, all in one call.
+    const second = await connect(stack(runner));
+    await call(second, 'coach_diagnosis', ALICE);
+    expect((await call(second, 'coach_ask_position', {})).structuredContent).toMatchObject({ title: 'No more positions' });
+    expect(fake.searched).toHaveLength(20);
+    await runner.close();
+  });
+
   it('askDeepCheckCapReturnsStatus', async () => {
     // Ten keep-the-win positions, all of which hold up at depth (the game move is the deep best).
     const kw = keepTheWinGames(10, { heldUp: true });
@@ -1185,6 +1308,9 @@ describe('keep the win', () => {
     expect(first.isError).toBeFalsy();
     expect(first.structuredContent).toMatchObject({ kind: 'status', title: 'No position ready yet' });
     expect(textOf(first)).toContain('the deeper check looked at 8 positions');
+    // Plain and true whatever the reason (held up, not winning at depth, only an inaccuracy there).
+    expect(textOf(first)).toContain('none of them was ready to ask');
+    expect(textOf(first)).not.toContain('held up in each');
     expect(engine.searched).toHaveLength(16); // 8 deep checks, two searches each: never more per call
     // The next call checks the remaining two and then says plainly there are no more.
     const second = await call(client, 'coach_ask_position', {});
@@ -1276,11 +1402,12 @@ describe('coach_examples', () => {
   it('reportCarriesDrillRefs', async () => {
     const { games, engine } = repeatedFixture();
     const runner = createRunner(NO_ENGINE, source(games.map((c) => c.game)));
-    const client = await connect(deps(runner, engine));
+    // Keep the win as the focus, so the repeated position is a quick fix (not a lesson board).
+    const client = await connect({ ...deps(runner, engine), leakReport: withFocus({ kind: 'keepTheWin' }) });
     const args = { accounts: [{ username: 'alice', maxGames: 300 }], timeClass: 'blitz' };
     const view = (await call(client, 'coach_report', args)).structuredContent as unknown as ReportView;
     expect(view.query).toEqual({ timeClass: 'blitz', accounts: [{ username: 'alice', maxGames: 300 }] });
-    expect(view.hero.source).toBe('opening');
+    expect(view.hero.source).toBe('thrownWins');
     expect(view.leaks.map((l) => l.key)).toHaveLength(6);
     expect(view.quickFixes?.[0].key).toBe(positionKey(REP_FEN));
     expect(parseCoachView(JSON.parse(JSON.stringify(view)))).toEqual(view);
