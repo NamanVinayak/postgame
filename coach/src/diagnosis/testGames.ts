@@ -30,6 +30,23 @@ export function scatter(count: number, slots: number, rng: () => number): boolea
   return out;
 }
 
+/**
+ * Per-game counts for one area: `games` games of `perSide` moves a side, with `myErr` / `oppErr`
+ * serious mistakes scattered at random (seeded) over all of each side's moves.
+ */
+export function spreadRows(games: number, perSide: number, myErr: number, oppErr: number, seed: number) {
+  const rng = testRng(seed);
+  const mine = scatter(myErr, games * perSide, rng);
+  const theirs = scatter(oppErr, games * perSide, rng);
+  const count = (marks: boolean[], g: number) => marks.slice(g * perSide, (g + 1) * perSide).filter(Boolean).length;
+  return Array.from({ length: games }, (_, g) => ({
+    myErr: count(mine, g),
+    myN: perSide,
+    oppErr: count(theirs, g),
+    oppN: perSide,
+  }));
+}
+
 /** Knights hopping out and back: full material, no captures, so every ply after move 10 is middlegame. */
 export function shuffleSans(plies: number): string[] {
   const cycle = ['Nf3', 'Nf6', 'Ng1', 'Ng8'];

@@ -23,7 +23,10 @@ export const STATS_CFG = {
   meaningfulGapPts: 2.0,   // power check (see plan B4): with ~300 games the 95% half-width is ~1.5 pts per area,
                            // so 1.0 would almost never allow "not your problem"; 2 pts ≈ one extra serious mistake per 50 moves
   gapAlpha: 0.05 / 6,      // six areas tested at once → Bonferroni-adjusted interval for the "gap" label
-  bootstrapN: 4000, seed: 1804,
+  minErrors: 20,           // both sides' serious mistakes combined; with fewer, resampled ranges look far surer
+                           // than they are (e.g. 7 vs 0 over 150 moves clears zero), so the area is not judged
+  bootstrapN: 10000,       // resamples per area; the adjusted range reads the 0.2% tails, which need this many
+  seed: 1804,
 };
 export const DISPLAY_CFG = { movetimeMs: 1500, multiPv: 3 };   // deep search for anything shown or drilled
 // When a repeated position counts as a real recurring mistake.

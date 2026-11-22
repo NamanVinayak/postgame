@@ -3,7 +3,7 @@ import type { CachedGame } from '../analysis/cache';
 import { STATS_CFG } from '../config';
 import { AREA_KEYS, type AreaKey } from './areas';
 import { areaFinding, diagnose, type AreaFinding, type Baseline, type Diagnosis } from './diagnose';
-import { fixtureGame, middlegameSet, randomSans, shuffleSans, testRng } from './testGames';
+import { fixtureGame, middlegameSet, randomSans, shuffleSans, spreadRows, testRng } from './testGames';
 
 const row = (d: Diagnosis, area: AreaKey): AreaFinding => d.areas.find((a) => a.area === area)!;
 
@@ -19,7 +19,9 @@ describe('diagnose', () => {
     expect(mg.ci95[1]).toBeLessThan(STATS_CFG.meaningfulGapPts);
     expect(mg.notes).toContain('same games, resampled by game');
     expect(d.focus).toBeNull();
-    expect(d.notes.join(' ')).toMatch(/No area stands out against players at your rating/);
+    expect(d.notes).toContain(
+      'Among the areas with enough games, none stands out against players at your rating in the same games.',
+    );
   });
 
   it('wideRangeGivesNoClearDifference', () => {
@@ -60,7 +62,7 @@ describe('diagnose', () => {
 
   it('thinnerSideDecidesNotEnoughData', () => {
     // Plenty of opponent moves cannot make up for too few of the player's (and the reverse).
-    const fewMyGames = Array.from({ length: 60 }, (_, i) => ({ myErr: 1, myN: i < 20 ? 30 : 0, oppErr: 1, oppN: 30 }));
+    const fewMyGames = Array.from({ length: 60 }, (_, i) => ({ myErr: i < 20 ? 1 : 0, myN: i < 20 ? 30 : 0, oppErr: 1, oppN: 30 }));
     const a = areaFinding('converting', fewMyGames);
     expect(a.label).toBe('notEnoughData');
     expect(a.notes).toContain('your moves here come from only 20 games; 30 needed');
@@ -68,6 +70,51 @@ describe('diagnose', () => {
     const b = areaFinding('defending', fewOppMoves);
     expect(b.label).toBe('notEnoughData');
     expect(b.notes).toContain("only 120 of your opponents' moves fall here; 150 needed");
+  });
+
+  it('sevenVsZeroAtFloorsIsNotGap', () => {
+    // 30 games, 150 moves a side: 7 serious mistakes against none is too few mistakes to judge.
+    const rows = Array.from({ length: 30 }, (_, g) => ({ myErr: g < 7 ? 1 : 0, myN: 5, oppErr: 0, oppN: 5 }));
+    const a = areaFinding('middlegame', rows);
+    expect(a.label).toBe('notEnoughData');
+    expect(a.notes).toContain('only 7 serious mistakes fall here; 20 needed to judge');
+  });
+
+  it('zeroVsZeroIsNotEnoughData', () => {
+    const rows = Array.from({ length: 30 }, () => ({ myErr: 0, myN: 5, oppErr: 0, oppN: 5 }));
+    const a = areaFinding('endgame', rows);
+    expect(a.label).toBe('notEnoughData');
+    expect(a.notes).toContain('no serious mistakes fall here; 20 needed to judge');
+  });
+
+  it('exactTestBlocksBorderlineGap', () => {
+    // 18 vs 6 mistakes over 1,000 moves a side: the resampled range clears zero, but 18 of 24
+    // mistakes landing on one side of an even split is not rare enough (p ≈ 0.011 > 0.0042).
+    const a = areaFinding('middlegame', spreadRows(40, 25, 18, 6, 5));
+    expect(a.ciAdj[0]).toBeGreaterThan(0);
+    expect(a.exactP).toBeCloseTo(190051 / 2 ** 24, 12);
+    expect(a.exactP!).toBeGreaterThan(STATS_CFG.gapAlpha / 2);
+    expect(a.label).not.toBe('gap');
+  });
+
+  it('clearGapStillGap', () => {
+    const a = areaFinding('middlegame', spreadRows(50, 30, 60, 25, 5)); // 60 vs 25 over 1,500 moves a side
+    expect(a.ciAdj[0]).toBeGreaterThan(0);
+    expect(a.exactP!).toBeLessThan(STATS_CFG.gapAlpha / 2);
+    expect(a.label).toBe('gap');
+  });
+
+  it('diagnoseFiltersToUsernames', () => {
+    const alice = middlegameSet(40, 60, 60, 19);
+    const carol = middlegameSet(10, 60, 0, 20).map((c, i) => ({
+      ...c,
+      game: { ...c.game, id: `carol-${i}`, username: 'carol' },
+    }));
+    const d = diagnose([...alice, ...carol], ['ALICE']);
+    expect(d.games).toBe(40);
+    expect(d.usernames).toEqual(['ALICE']);
+    expect(d.notes.join(' ')).toMatch(/10 games from other accounts were left out/);
+    expect(diagnose([...alice, ...carol], ['alice', 'Carol']).games).toBe(50);
   });
 
   it('fewGamesGivesNotEnoughData', () => {
@@ -118,6 +165,8 @@ describe('diagnose', () => {
     expect(mg.oppRate).toBeCloseTo(2, 10);
     expect(mg.gapPts).toBeCloseTo(4, 10);
     expect(mg.label).toBe('gap');
+    expect(mg.exactP).toBeNull(); // fractional counts: the exact count check is skipped, and said so
+    expect(mg.notes.join(' ')).toMatch(/not whole counts/);
     expect(d.notes.join(' ')).toMatch(/a flat 2% reference/);
   });
 
