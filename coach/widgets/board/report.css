@@ -24,7 +24,8 @@
   --rc-glow: rgba(94, 234, 212, 0.5);
   --rc-peer: rgba(226, 232, 240, 0.85);
   --rc-grid: rgba(148, 163, 184, 0.15);
-  --rc-range: rgba(94, 234, 212, 0.24);
+  --rc-range: rgba(94, 234, 212, 0.34);
+  --rc-range-tick: rgba(94, 234, 212, 0.8);
   --rc-dot: #0b1220;
   --rc-unknown: #94a3b8; /* areas with too few games: dotted segments, "?" ring */
   --rc-good-bg: rgba(34, 197, 94, 0.14);
@@ -77,9 +78,10 @@
   --rc-glow: rgba(13, 148, 136, 0.28);
   --rc-peer: rgba(15, 23, 42, 0.72);
   --rc-grid: rgba(15, 23, 42, 0.09);
-  --rc-range: rgba(13, 148, 136, 0.2);
+  --rc-range: rgba(13, 148, 136, 0.3);
+  --rc-range-tick: rgba(13, 148, 136, 0.85);
   --rc-dot: #ffffff;
-  --rc-unknown: #8a97ab;
+  --rc-unknown: #6b7890; /* >= 3:1 on every part of the light card, faded wedges included */
   --rc-good-bg: rgba(22, 163, 74, 0.1);
   --rc-good-fg: #166534;
   --rc-good-icon: #16a34a;
@@ -241,10 +243,19 @@
   stroke-dasharray: 2 4;
   opacity: 0.7;
 }
+/* Every band the same, on every spoke and in the legend: one colour, one width in screen pixels. */
 .rc-range {
   stroke: var(--rc-range);
-  stroke-width: 7;
+  stroke-width: 6;
   stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+/* Where the chart's edge cuts a band. */
+.rc-rangeTick {
+  stroke: var(--rc-range-tick);
+  stroke-width: 2;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
 }
 .rc-stop0 {
   stop-color: var(--rc-fill0);
@@ -428,16 +439,10 @@
   background: var(--rc-fill1);
   border: 1.5px solid var(--rc-accent);
 }
-.rc-kPeer {
-  width: 16px;
-  height: 0;
-  border-top: 1.5px dashed var(--rc-peer);
-}
-.rc-kRange {
-  width: 16px;
-  height: 6px;
-  border-radius: 3px;
-  background: var(--rc-range);
+.rc-keySvg {
+  display: inline-block;
+  flex: none;
+  overflow: visible;
 }
 .rc-kFaded {
   width: 14px;

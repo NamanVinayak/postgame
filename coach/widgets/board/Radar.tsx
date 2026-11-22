@@ -1,5 +1,5 @@
 import type { ReportLabel, ReportRow } from '../../src/server/views';
-import { MIN_RADIUS, PEER_RADIUS, VERDICTS, bandOpacity, pct, radarSummary, relativeRadius } from './radarScale';
+import { MIN_RADIUS, PEER_RADIUS, VERDICTS, bandEnds, pct, radarSummary, relativeRadius, shapeDrawn } from './radarScale';
 
 export function Chip({ label }: { label: ReportLabel }) {
   const v = VERDICTS[label];
@@ -20,9 +20,6 @@ const orderOf = (area: string) => {
   return i === -1 ? AREA_ORDER.length : i;
 };
 
-/** With this many areas short of games, no shape is drawn at all: only the points we have. */
-export const MAX_UNKNOWN_FOR_SHAPE = 2;
-
 interface Geometry {
   w: number;
   h: number;
@@ -36,14 +33,15 @@ const SIZES: Record<'compact' | 'large', Geometry> = {
 /**
  * The hexagon, relative to players at your rating. They are the dashed regular hexagon. Your
  * filled shape goes outside it where you made fewer serious mistakes than them and inside where
- * you made more (the scale and its reasons are in radarScale.ts). Where you likely are is a soft
- * band along each spoke on the same scale, quieter the further it pokes outside the hexagon.
+ * you made more (the scale and its reasons are in radarScale.ts). Where you likely are is a band
+ * along each spoke on the same scale, drawn the same way on every spoke and in both directions
+ * from your point. Where the chart's edge cuts a band, a small end tick marks the cut.
  *
  * An area with too few games has no point. Your outline passes through the hexagon there, since
  * there is no evidence either way: skipping the spoke would cut a chord deep inside the hexagon,
  * which on this scale reads as "more mistakes". The two segments that touch that spoke are dotted
  * and grey, the wedges either side are faded, and a hollow "?" ring marks the spot. With three or
- * more such areas no shape is drawn, only the points we have.
+ * more such areas no shape is drawn, only the points we have (shapeDrawn).
  */
 export function Radar({ rows, size }: { rows: ReportRow[]; size: 'compact' | 'large' }) {
   const sorted = rows.map((row, i) => ({ row, i })).sort((a, b) => orderOf(a.row.area) - orderOf(b.row.area) || a.i - b.i);
@@ -69,7 +67,7 @@ export function Radar({ rows, size }: { rows: ReportRow[]; size: 'compact' | 'la
   // Faint rings for structure only: the inner limit, halfway to the hexagon, halfway to the rim, the rim.
   const rings = [MIN_RADIUS, (MIN_RADIUS + PEER_RADIUS) / 2, (PEER_RADIUS + 1) / 2, 1];
 
-  const showShape = known.length >= 3 && unknownCount <= MAX_UNKNOWN_FOR_SHAPE;
+  const showShape = shapeDrawn(axes.map((a) => a.row));
   const next = (i: number) => (i + 1) % n;
   const solidSide = (i: number) => axes[i].known && axes[next(i)].known;
   const wedge = (i: number) => `M0,0 L${xy(corner[i])} L${xy(corner[next(i)])} Z`;
@@ -119,11 +117,21 @@ export function Radar({ rows, size }: { rows: ReportRow[]; size: 'compact' | 'la
         ))}
         {axes.map((a, i) => {
           if (!a.known || !a.row.range) return null;
-          const outer = rad(a.row.range[0], a.row.them!); // your lowest likely rate sits furthest out
-          const [x1, y1] = at(rad(a.row.range[1], a.row.them!), a);
-          const [x2, y2] = at(outer, a);
+          const band = bandEnds(a.row.range, a.row.them!);
+          const [x1, y1] = at(R * band.inner, a);
+          const [x2, y2] = at(R * band.outer, a);
+          // A short tick across the spoke where the chart's edge cuts the band.
+          const tick = (f: number) => {
+            const [x, y] = at(R * f, a);
+            const T = 6;
+            return <line key={`t${i}-${f}`} x1={x + T * a.sin} y1={y - T * a.cos} x2={x - T * a.sin} y2={y + T * a.cos} className="rc-rangeTick" />;
+          };
           return (
-            <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} className="rc-range" style={{ opacity: bandOpacity(outer / R) }} />
+            <g key={i}>
+              <line x1={x1} y1={y1} x2={x2} y2={y2} className="rc-range" />
+              {band.cutInner && tick(band.inner)}
+              {band.cutOuter && tick(band.outer)}
+            </g>
           );
         })}
         {showShape && unknownCount === 0 && (
@@ -178,5 +186,63 @@ export function Radar({ rows, size }: { rows: ReportRow[]; size: 'compact' | 'la
         </div>
       ))}
     </div>
+  );
+}
+
+/**
+ * The chart's key. Each swatch is the chart's own mark: the band swatch is the same element with
+ * the same class as a band, so the two always look alike. It mentions fading and a filled "You"
+ * shape only when the chart draws a shape (shapeDrawn); otherwise "You" is a dot.
+ */
+export function RadarLegend({ rows }: { rows: ReportRow[] }) {
+  const shape = shapeDrawn(rows);
+  const someUnknown = rows.some((r) => r.you === null || r.them === null);
+  return (
+    <>
+      <div className="rc-keys" aria-hidden="true">
+        <span>
+          {shape ? (
+            <i className="rc-kYou" />
+          ) : (
+            <svg className="rc-keySvg" width="12" height="12" viewBox="-6 -6 12 12">
+              <circle r="4" className="rc-youDot" />
+            </svg>
+          )}{' '}
+          You
+        </span>
+        <span>
+          <svg className="rc-keySvg" width="22" height="10" viewBox="0 0 22 10">
+            <line x1="1" y1="5" x2="21" y2="5" className="rc-peer" />
+          </svg>{' '}
+          Players at your rating
+        </span>
+        <span>
+          <svg className="rc-keySvg" width="22" height="10" viewBox="0 0 22 10">
+            <line x1="4" y1="5" x2="18" y2="5" className="rc-range" />
+          </svg>{' '}
+          Where you likely are
+        </span>
+        {someUnknown && shape && (
+          <span>
+            <i className="rc-kFaded" /> Faded = not enough games
+          </span>
+        )}
+        {someUnknown && !shape && (
+          <span>
+            <svg className="rc-keySvg" width="16" height="16" viewBox="-8 -8 16 16">
+              <circle r="6.5" className="rc-unknownRing" />
+              <text className="rc-unknownQ">?</text>
+            </svg>{' '}
+            = not enough games
+          </span>
+        )}
+      </div>
+      <div className="rc-legendStrong">
+        Dashed hexagon = players at your rating. Outside it = fewer serious mistakes than them; inside = more.
+      </div>
+      <div className="rc-legendLine">
+        {shape ? 'The shape shows where you sit; the chips give the verdict.' : 'The dots show where you sit; the chips give the verdict.'}
+      </div>
+    </>
   );
 }
