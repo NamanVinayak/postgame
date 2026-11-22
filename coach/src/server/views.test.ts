@@ -517,7 +517,7 @@ describe('report card v4', () => {
       ["When you're already winning", 24, [21, 27], 'About 1 costly move per game'],
       ['Your first 10 moves', 21, [18, 24], 'About 1 costly move per game'],
       ['Low on the clock', 10, [7, 13], '72 of your 448 losses were on time'],
-      ["When you're already losing", 7, [4, 10], 'About 1 costly move every 2 games'],
+      ["When you're already losing", 7, [4, 10], 'About 1 costly move every 3 games'],
       ['Endgames', 4, [1, 7], 'About 1 costly move every 5 games'],
     ]);
     expect(view.context).toBe('Your opponents keep the same share of their winning games as you (69%): normal at your level, and the biggest thing you control.');
@@ -670,9 +670,11 @@ describe('report card v4, review fixes', () => {
     expect(costlyMovesText(3.4)).toBe('About 3 costly moves per game');
     expect(costlyMovesText(1.49)).toBe('About 1 costly move per game'); // 0.75 to 1.5
     expect(costlyMovesText(0.75)).toBe('About 1 costly move per game');
-    expect(costlyMovesText(0.74)).toBe('About 1 costly move every 2 games'); // 0.3 to 0.75
-    expect(costlyMovesText(0.3)).toBe('About 1 costly move every 2 games');
-    expect(costlyMovesText(0.29)).toBe('About 1 costly move every 3 games'); // < 0.3: N = round(1 / x)
+    expect(costlyMovesText(0.74)).toBe('About 1 costly move every 2 games'); // below 0.75: N = max(2, round(1 / x))
+    expect(costlyMovesText(0.6)).toBe('About 1 costly move every 2 games');
+    expect(costlyMovesText(0.35)).toBe('About 1 costly move every 3 games');
+    expect(costlyMovesText(0.3)).toBe('About 1 costly move every 3 games');
+    expect(costlyMovesText(0.29)).toBe('About 1 costly move every 3 games');
     expect(costlyMovesText(0.2)).toBe('About 1 costly move every 5 games');
     expect(costlyMovesText(0.04)).toBe('About 1 costly move every 25 games');
     expect(costlyMovesText(0)).toBe('No costly moves here');
