@@ -23,11 +23,11 @@ in Claude Code with one line.
 
 I already coach myself this way, with an AI agent workflow I put together. It pulled every
 game from my Chess.com accounts (about 7,600 games), ran each one through Stockfish, and
-looked for patterns. Generic game review never showed me the result: **my opening knowledge runs
-out after about three moves.** My rate of serious errors climbs from 0.4% on move 3 to
-7.5% by move 8 and 19% by move 19, and the curve is the same in blitz and rapid. So the
-problem is missing knowledge, not playing too fast. The usual suspects (bad openings,
-tilt, time of day, weak tactics) all tested as noise.
+looked for patterns. Generic game review never showed me the pattern: **my rate of serious
+mistakes climbs steeply once a game leaves the first few moves.** Averaged across all my
+games, it goes from 0.4% on move 3 to 7.5% by move 8 and 19% by move 19, and the curve
+is the same in blitz and rapid, so playing too fast isn't the cause. The usual suspects
+(bad openings, tilt, time of day, weak tactics) all tested as noise.
 
 That process works, but it's manual and only I can run it. Postgame Coach packages it so
 any player can.
