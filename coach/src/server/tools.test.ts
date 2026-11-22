@@ -221,6 +221,30 @@ describe('coach_diagnosis', () => {
     await runner.close();
   });
 
+  it('several accounts still running: progress summed over their jobs, within 2 s', async () => {
+    const gate = deferred();
+    const other = (n: number): CoachGame => ({ ...game(n), username: 'alice2' });
+    const src = source([], undefined, { alice: [game(1), game(2)], alice2: [other(3), other(4), other(5)] });
+    const runner = createRunner(() => gatedEngine(gate.promise), src);
+    const client = await connect(deps(runner));
+    let res: CallResult | undefined;
+    try {
+      const t0 = Date.now();
+      res = await call(client, 'coach_diagnosis', {
+        accounts: [{ username: 'alice', maxGames: 2 }, { username: 'alice2', maxGames: 3 }],
+        timeClass: 'blitz',
+      });
+      expect(Date.now() - t0).toBeLessThan(2000);
+      expect(textOf(res)).toMatch(/analysed 0 of 5 games so far/);
+      expect(res.structuredContent).toMatchObject({ state: 'running', done: 0, total: 5 });
+      expect(res.structuredContent?.jobIds).toHaveLength(2);
+    } finally {
+      gate.resolve();
+      if (res) await waitAll(runner, res);
+      await runner.close();
+    }
+  });
+
   it('keeps the diagnosis for repeat calls until the set of cached games changes', async () => {
     const a = cachedGame('https://example.test/game/m1', 'alice');
     const games = [a.game];
