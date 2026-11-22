@@ -211,7 +211,9 @@ const LABEL_ORDER: Record<ReportLabel, number> = { gap: 0, notYourProblem: 1, no
  *
  * `extras` adds the sentence under the headline, up to three focus positions and the button
  * label. A position that `parseCoachView` would refuse is dropped here (the others stay), so
- * the widget never gets a report it can't show; the win-chance loss is rounded to 0.1.
+ * the widget never gets a report it can't show; the same goes for a button label that is
+ * empty or too long (it is left out and the widget's default applies). The win-chance loss is
+ * rounded to 0.1.
  */
 export function toReportView(d: DiagnosisLike, headline: string, extras: ReportExtras = {}): CoachView {
   const lowEnd = (a: DiagnosisLike['areas'][number]) => (a.ciAdj ?? a.ci95)[0];
@@ -257,7 +259,7 @@ export function toReportView(d: DiagnosisLike, headline: string, extras: ReportE
       .slice(0, MAX_REPORT_POSITIONS)
       .map((p) => ({ ...p, wrongSan: [...p.wrongSan], lossPts: round1(p.lossPts) }));
   }
-  if (extras.cta !== undefined) view.cta = extras.cta;
+  if (isCta(extras.cta)) view.cta = extras.cta; // otherwise the widget's default label applies
   return view;
 }
 
@@ -304,6 +306,8 @@ function isRow(r: unknown): boolean {
 }
 
 const isCount = (x: unknown): x is number => isNum(x) && Number.isInteger(x) && x >= 0;
+/** A button label: some text, at most MAX_CTA_LENGTH characters. */
+const isCta = (x: unknown): x is string => isStr(x) && x.trim().length > 0 && x.length <= MAX_CTA_LENGTH;
 
 /** A UCI move such as "g8f6" or "e7e8q" (the same shape the board's arrows accept). */
 const UCI = /^[a-h][1-8][a-h][1-8][qrbn]?$/;
@@ -364,7 +368,7 @@ function isReport(v: Obj): boolean {
     (v.subhead === undefined || isStr(v.subhead)) &&
     (v.positions === undefined ||
       (Array.isArray(v.positions) && v.positions.length <= MAX_REPORT_POSITIONS && v.positions.every(isPosition))) &&
-    (v.cta === undefined || (isStr(v.cta) && v.cta.trim().length > 0 && v.cta.length <= MAX_CTA_LENGTH))
+    (v.cta === undefined || isCta(v.cta))
   );
 }
 

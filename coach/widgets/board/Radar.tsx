@@ -125,11 +125,12 @@ export function Radar({ rows, size }: { rows: ReportRow[]; size: 'compact' | 'la
           const [x2, y2] = at(rad(a.row.range[0]), a);
           return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} className="rc-range" />;
         })}
+        {/* The dashed outline goes on top: with small gaps it would otherwise hide under yours. */}
         {known.length >= 3 && (
           <>
-            <polygon points={pts(them)} className="rc-peer" />
             <polygon points={pts(you)} className="rc-youGlow" filter="url(#rc-glow)" />
             <polygon points={pts(you)} className="rc-you" fill="url(#rc-you-fill)" />
+            <polygon points={pts(them)} className="rc-peer" />
           </>
         )}
         {known.length < 3 &&
