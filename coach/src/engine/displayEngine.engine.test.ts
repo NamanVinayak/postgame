@@ -33,8 +33,11 @@ describe('display search', () => {
     const [a, b] = await Promise.all([searchAll(FENS), searchAll([...FENS].reverse())]);
     for (const fen of FENS) {
       expect(a.get(fen)?.bestMoveUci).toBeTruthy();
+      // Each search reached the full depth well inside its time cap, so it would be stored.
+      expect(a.get(fen)).toMatchObject({ depth: DISPLAY_SETTINGS.depth, capped: false });
       // Same best move, score, line and second choice: the whole answer, not just the move.
       expect(b.get(fen)).toEqual(a.get(fen));
     }
+    expect(await open[0].engineId()).toMatch(/^Stockfish /);
   });
 });

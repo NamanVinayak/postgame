@@ -14,9 +14,36 @@ export type NativeStockfishOptions = Partial<typeof ENGINE_CFG> & {
    * search of a position give the same answer (used by the display engine).
    */
   depth?: number;
+  /**
+   * Time cap on a fixed-depth search, in ms (default 10 s; rarely hit). A search it cuts short
+   * is still returned, marked `capped`.
+   */
+  capMs?: number;
 };
 
+/** The settings an adapter searches with (its own copy, so callers can key results on them). */
+export type NativeSettings = typeof ENGINE_CFG & { depth?: number; capMs?: number };
+
+/** An evaluation plus how far the search got. */
+export interface NativeEvaluation extends Evaluation {
+  /** Deepest `info depth` reported for the best line; null if none. */
+  depth: number | null;
+  /**
+   * True when a fixed-depth search stopped before its depth (the time cap hit). Its answer is
+   * time-dependent, so it must not be stored as the depth-N answer. Always false for a timed search.
+   */
+  capped: boolean;
+}
+
+/** Default time cap on a fixed-depth search (rarely hit: depth 16 takes 1-2 s on a middlegame). */
+export const DEPTH_CAP_MS = 10_000;
+
 export interface NativeStockfish extends Engine {
+  evaluate(fen: string, movetimeMs: number): Promise<NativeEvaluation>;
+  /** The engine's `id name` (e.g. "Stockfish 19"), starting the process if needed. */
+  engineId(): Promise<string>;
+  /** The settings this adapter searches with. */
+  settings(): NativeSettings;
   /**
    * Terminate the Stockfish child process and wait for it to exit. In-flight and
    * later `evaluate` calls reject. Safe to call more than once.
@@ -38,7 +65,8 @@ export interface NativeStockfish extends Engine {
  * NOTE: the `movetimeMs` argument of `evaluate` is IGNORED. The search time is
  * fixed per adapter by `opts.movetimeMs` (default `ENGINE_CFG.movetimeMs`) so
  * that every caller of `analyzeGame` gets the same, configured search budget.
- * With `opts.depth`, each search is `ucinewgame` + `go depth N` instead (no time limit).
+ * With `opts.depth`, each search is `ucinewgame` + `go depth N movetime <capMs>` instead; a
+ * search stopped by the cap before depth N is returned with `capped: true`.
  *
  * The binary path comes from `opts.path`, else `loadLocalConfig().stockfishPath`.
  * The process is started lazily on the first `evaluate`; a missing binary makes
@@ -49,6 +77,7 @@ export interface NativeStockfish extends Engine {
 export function createNativeStockfish(opts: NativeStockfishOptions = {}): NativeStockfish {
   const cfg = { ...ENGINE_CFG, ...stripUndefined(opts) };
   const path = opts.path ?? loadLocalConfig().stockfishPath;
+  const capMs = cfg.capMs ?? DEPTH_CAP_MS;
 
   let child: Proc | null = null;
   /** True from spawn() until the process exits or fails to start. */
@@ -56,6 +85,8 @@ export function createNativeStockfish(opts: NativeStockfishOptions = {}): Native
   /** Once set, the adapter is unusable and every evaluate rejects with this. */
   let dead: Error | null = null;
   let started: Promise<void> | null = null;
+  /** From the `id name` line of the UCI handshake. */
+  let engineName = 'unknown engine';
   let searched = 0;
   let chain: Promise<unknown> = Promise.resolve();
   let buffer = '';
@@ -138,7 +169,15 @@ export function createNativeStockfish(opts: NativeStockfishOptions = {}): Native
     if (!started) {
       started = (async () => {
         await spawnChild();
-        await waitFor((l) => l === 'uciok', 'uci');
+        const onId = (l: string) => {
+          if (l.startsWith('id name ')) engineName = l.slice('id name '.length).trim();
+        };
+        listeners.add(onId);
+        try {
+          await waitFor((l) => l === 'uciok', 'uci');
+        } finally {
+          listeners.delete(onId);
+        }
         send(`setoption name Threads value ${cfg.threads}`);
         send(`setoption name Hash value ${cfg.hashMb}`);
         send(`setoption name MultiPV value ${cfg.multiPv}`);
@@ -149,14 +188,18 @@ export function createNativeStockfish(opts: NativeStockfishOptions = {}): Native
     return started;
   }
 
-  function search(fen: string): Promise<Evaluation> {
+  function search(fen: string): Promise<NativeEvaluation> {
     return new Promise((resolve, reject) => {
       if (dead) return reject(dead);
       const tiers: Record<number, { cp: number | null; mate: number | null; pv: string[] | null }> = {};
+      let reached: number | null = null;
+      let t0 = 0;
       const onLine = (line: string) => {
         const info = parseUciInfo(line);
         if (info) {
           tiers[info.tier] = { cp: info.cp, mate: info.mate, pv: info.pv };
+          const d = /\bdepth (\d+)/.exec(line);
+          if (info.tier === 1 && d) reached = Math.max(reached ?? 0, Number(d[1]));
           return;
         }
         if (!line.startsWith('bestmove')) return;
@@ -171,12 +214,18 @@ export function createNativeStockfish(opts: NativeStockfishOptions = {}): Native
           };
         }
         searched++;
+        // Cut short: below the depth asked for, or stopped by the cap (a little early counts too:
+        // wrongly calling a search capped only costs a re-search, the opposite would store a partial one).
+        const capped =
+          cfg.depth !== undefined && ((reached ?? 0) < cfg.depth || Date.now() - t0 >= capMs - 50);
         resolve({
           cp: top.cp,
           mate: top.mate,
           bestMoveUci: parseBestmove(line),
           secondBest,
           pvUci: top.pv ?? null,
+          depth: reached,
+          capped,
         });
       };
       const onFail = (err: Error) => {
@@ -190,11 +239,12 @@ export function createNativeStockfish(opts: NativeStockfishOptions = {}): Native
       listeners.add(onLine);
       failures.add(onFail);
       send(`position fen ${fen}`);
-      send(cfg.depth !== undefined ? `go depth ${cfg.depth}` : `go movetime ${cfg.movetimeMs}`);
+      t0 = Date.now();
+      send(cfg.depth !== undefined ? `go depth ${cfg.depth} movetime ${capMs}` : `go movetime ${cfg.movetimeMs}`);
     });
   }
 
-  async function evaluate(fen: string, _movetimeMs: number): Promise<Evaluation> {
+  async function evaluate(fen: string, _movetimeMs: number): Promise<NativeEvaluation> {
     const run = chain.then(async () => {
       await ensureStarted();
       if (cfg.depth !== undefined) {
@@ -226,7 +276,20 @@ export function createNativeStockfish(opts: NativeStockfishOptions = {}): Native
     die(dead); // reject anything still waiting
   }
 
-  return { evaluate, close, positionsSearched: () => searched, pid: () => (alive ? (child?.pid ?? null) : null) };
+  async function engineId(): Promise<string> {
+    await ensureStarted();
+    return engineName;
+  }
+
+  const { path: _path, ...settings } = cfg;
+  return {
+    evaluate,
+    engineId,
+    settings: () => ({ ...settings }),
+    close,
+    positionsSearched: () => searched,
+    pid: () => (alive ? (child?.pid ?? null) : null),
+  };
 }
 
 function stripUndefined<T extends object>(o: T): T {
