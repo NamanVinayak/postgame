@@ -330,6 +330,13 @@ describe('toReportView with focus positions', () => {
     ]) {
       expect(parseCoachView({ ...good, ...over }), JSON.stringify(over).slice(0, 80)).toBeNull();
     }
+    // A button label the widget would refuse is left out (the widget's default applies), so the card still shows.
+    for (const cta of ['', '   ', 'x'.repeat(61)]) {
+      const mapped = toReportView(d, 'h', { positions: [position()], cta });
+      if (mapped.kind !== 'report') throw new Error('not a report');
+      expect(mapped.cta, JSON.stringify(cta)).toBeUndefined();
+      expect(parseCoachView(JSON.parse(JSON.stringify(mapped)))).toEqual(mapped);
+    }
   });
 });
 
