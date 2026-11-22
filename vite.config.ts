@@ -1,5 +1,6 @@
 /// <reference types="vitest/config" />
 import { defineConfig } from 'vite';
+import { configDefaults } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
@@ -35,5 +36,7 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['src/test/setup.ts'],
     css: false,
+    // coach/ is a separate package with its own vitest config; keep it out of the root run.
+    exclude: [...configDefaults.exclude, 'coach/**'],
   },
 });
