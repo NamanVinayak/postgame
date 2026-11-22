@@ -1,28 +1,21 @@
 import type { App } from '@modelcontextprotocol/ext-apps';
 import { Chess, type Square } from 'chess.js';
 import { useRef, useState, type CSSProperties } from 'react';
-import { parseCoachView, type CoachView } from '../../src/server/views';
-import { AnswerBoard, type AnswerView } from './AnswerBoard';
-import { Board, LAST_MOVE, SELECTED, TARGET, TARGET_CAPTURE, errorText, resultText } from './shared';
+import type { CoachView } from '../../src/server/views';
+import { Board, LAST_MOVE, SELECTED, TARGET, TARGET_CAPTURE } from './shared';
 
 type QuestionView = Extract<CoachView, { kind: 'question' }>;
 
-type Check =
-  | { kind: 'idle' }
-  | { kind: 'checking' }
-  | { kind: 'answered'; view: AnswerView }
-  | { kind: 'failed'; message: string };
-
 type Chat = 'idle' | 'drafted' | 'failed';
 
-export const CHECK_TOOL = 'coach_check_move';
 /** Claude Desktop puts this in the chat box (it doesn't send it); the player finishes the sentence. */
 export const draftText = (moveSan: string) => `I played ${moveSan} here, because `;
 
 /**
  * The question: the position with no arrows and no eval. The player makes one move (drag, or
- * tap a piece then tap where it goes). The move is then checked by the server, and the chat
- * box is pre-filled so the player can add why they chose it.
+ * tap a piece then tap where it goes), which only pre-fills the chat box. Try-first is strict:
+ * nothing about the answer is fetched or shown here. The coach reads the player's reason and
+ * then calls coach_check_move, whose result appears as a new board in answer mode.
  */
 export function QuestionBoard({ app, view }: { app: App; view: QuestionView }) {
   let turn: 'w' | 'b';
@@ -38,48 +31,20 @@ function Question({ app, view, turn }: { app: App; view: QuestionView; turn: 'w'
   const [fen, setFen] = useState(view.fen);
   const [moved, setMoved] = useState<{ san: string; from: string; to: string } | null>(null);
   const [selected, setSelected] = useState<Square | null>(null);
-  const [check, setCheck] = useState<Check>({ kind: 'idle' });
   const [chat, setChat] = useState<Chat>('idle');
-  const done = useRef(false); // one move per question, even if two events land before a re-render
-
-  const runCheck = async (moveSan: string) => {
-    setCheck({ kind: 'checking' });
-    try {
-      const res = await app.callServerTool({
-        name: CHECK_TOOL,
-        arguments: { gameId: view.gameId, ply: view.ply, moveSan },
-      });
-      const text = resultText(res.content);
-      if (res.isError) {
-        setCheck({ kind: 'failed', message: text || 'the coach could not check it' });
-        return;
-      }
-      const answer = parseCoachView(res.structuredContent);
-      if (answer?.kind !== 'answer') {
-        setCheck({ kind: 'failed', message: 'the check came back without a board' });
-        return;
-      }
-      setCheck({ kind: 'answered', view: answer });
-      // Best effort: lets the coach see the scored attempt when the player sends their reason.
-      if (text) {
-        app
-          .updateModelContext({
-            content: [{ type: 'text', text: `The player tried ${moveSan} on the board (game ${view.gameId}, ply ${view.ply}). Check result: ${text}` }],
-          })
-          .catch(() => undefined);
-      }
-    } catch (err) {
-      setCheck({ kind: 'failed', message: errorText(err) });
-    }
-  };
+  const done = useRef(false); // one move at a time, even if two events land before a re-render
+  const draftId = useRef(0); // ignores a late reply to the draft of a move that was changed
 
   const draftReason = async (moveSan: string) => {
+    const id = ++draftId.current;
+    let result: Chat;
     try {
       const res = await app.sendMessage({ role: 'user', content: [{ type: 'text', text: draftText(moveSan) }] });
-      setChat(res.isError ? 'failed' : 'drafted');
+      result = res.isError ? 'failed' : 'drafted';
     } catch {
-      setChat('failed');
+      result = 'failed';
     }
+    if (id === draftId.current) setChat(result);
   };
 
   /** Plays from→to if legal (auto-queening a promotion); returns whether the move was made. */
@@ -96,29 +61,28 @@ function Question({ app, view, turn }: { app: App; view: QuestionView; turn: 'w'
     setFen(chess.fen());
     setMoved({ san: move.san, from: move.from, to: move.to });
     setSelected(null);
-    // Both start now; neither waits for, or is blocked by, the other.
-    void runCheck(move.san);
+    setChat('idle');
     void draftReason(move.san);
     return true;
   };
 
+  /** Back to the question position so the player can pick another move. */
+  const changeMove = () => {
+    done.current = false;
+    draftId.current++;
+    setFen(view.fen);
+    setMoved(null);
+    setSelected(null);
+    setChat('idle');
+  };
+
   const onSquareClick = (square: string) => {
     if (done.current) return;
-    const chess = new Chess(view.fen);
-    const piece = chess.get(square as Square);
+    const piece = new Chess(view.fen).get(square as Square);
     if (selected && selected !== square && tryMove(selected, square)) return;
     if (piece && piece.color === turn && selected !== square) setSelected(square as Square);
     else setSelected(null);
   };
-
-  if (check.kind === 'answered') {
-    return (
-      <>
-        <AnswerBoard view={check.view} />
-        <ChatHint chat={chat} />
-      </>
-    );
-  }
 
   const squareStyles: Record<string, CSSProperties> = {};
   if (moved) {
@@ -149,19 +113,18 @@ function Question({ app, view, turn }: { app: App; view: QuestionView; turn: 'w'
           {turn === 'w' ? 'White' : 'Black'} to move. Drag a piece, or tap it and then tap where it goes.
         </p>
       )}
-      {moved && check.kind === 'checking' && <p className="pg-p">Checking {moved.san}…</p>}
-      {moved && check.kind === 'failed' && (
-        <p className="pg-p pg-error">
-          Couldn't check {moved.san}: {check.message}
-        </p>
+      {moved && (
+        <div className="pg-hint pg-moved">
+          <span>
+            {chat === 'failed'
+              ? `Your move: ${moved.san}. Tell the coach your move and why in the chat.`
+              : `Your move: ${moved.san}. Now add why you chose it in the chat, then press Enter.`}
+          </span>
+          <button type="button" className="pg-button" onClick={changeMove}>
+            Change move
+          </button>
+        </div>
       )}
-      {moved && <ChatHint chat={chat} />}
     </>
   );
-}
-
-function ChatHint({ chat }: { chat: Chat }) {
-  if (chat === 'drafted') return <p className="pg-hint">Add why you chose it, then press Enter.</p>;
-  if (chat === 'failed') return <p className="pg-hint">Tell the coach your move and why in the chat.</p>;
-  return null;
 }

@@ -115,6 +115,43 @@ describe('toAnswerView', () => {
   });
 });
 
+describe('toAnswerView with the student attempt', () => {
+  it('answerViewShowsAttemptWhenGiven', () => {
+    // Game move Nf6, best Bc5; the student tried Be7.
+    const view = toAnswerView(facts(), { moveSan: 'Be7', moveUci: 'f8e7' });
+    if (view.kind !== 'answer') throw new Error('not an answer');
+    expect(view.playedSan).toBe('Be7'); // the red "Your move" is the attempt, not the game move
+    expect(view.playedUci).toBe('f8e7');
+    expect(view.bestSan).toBe('Bc5');
+    expect(view.bestUci).toBe('f8c5');
+    expect(view.orientation).toBe('black');
+    expect(view.fen).toBe(FEN_BEFORE);
+    expect(view.bestLineSan).toEqual(['Bc5', 'c3', 'Nf6', 'd4']);
+    // The win % belong to the game move, so they are told as the game move's, never as the attempt's.
+    expect(view.winBefore).toBe(57.6);
+    expect(view.winAfter).toBeNull();
+    expect(view.caption).toContain('You tried Be7; the best move is Bc5.');
+    expect(view.caption).toContain('In the game you played Nf6: your win chance went from 58% to 38%.');
+    expect(view.caption).not.toContain('Ng5'); // the refutation answers Nf6, not Be7
+    expect(view.caption).not.toContain('f7 open'); // so does the reason
+
+    // The attempt is the best move: one green arrow, no separate best.
+    const best = toAnswerView(facts(), { moveSan: 'Bc5', moveUci: 'f8c5' });
+    if (best.kind !== 'answer') throw new Error('not an answer');
+    expect([best.playedSan, best.playedUci, best.bestSan, best.bestUci]).toEqual(['Bc5', 'f8c5', null, null]);
+    expect(best.caption).toContain('Bc5 is the best move here.');
+
+    // The game move was best (null best in the facts) and the student tried something else:
+    // the game move is the best move to show.
+    const gameWasBest = toAnswerView(facts({ bestSan: null, bestUci: null }), { moveSan: 'Be7', moveUci: 'f8e7' });
+    if (gameWasBest.kind !== 'answer') throw new Error('not an answer');
+    expect([gameWasBest.playedSan, gameWasBest.bestSan, gameWasBest.bestUci]).toEqual(['Be7', 'Nf6', 'g8f6']);
+
+    // Trying the game move again is the same as no attempt.
+    expect(toAnswerView(facts(), { moveSan: 'Nf6', moveUci: 'g8f6' })).toEqual(toAnswerView(facts()));
+  });
+});
+
 describe('toReportView', () => {
   it('reportViewCapsAtSixRowsPlainLabels', () => {
     const d = diagnosis(

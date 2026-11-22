@@ -1,7 +1,7 @@
 /**
  * Widget spike (plan Tasks A1 and A2): a stdio MCP server whose only job is to show the board
  * widget inside Claude Desktop through MCP Apps, in all three of its views (answer, question,
- * report card), and to let the question board's check round-trip. Not the real coach server:
+ * report card), plus a stub of the move check the coach calls after a question. Not the real coach server:
  * every position, move and number here is fixed test data, not engine or diagnosis output.
  *
  * Run: node coach/node_modules/tsx/dist/cli.mjs coach/src/server/spike.ts
@@ -13,7 +13,7 @@ import { Chess } from 'chess.js';
 import { z } from 'zod';
 import type { PositionFacts } from '../coaching/positionFacts';
 import { BOARD_URI, registerBoardResource } from './boardResource';
-import { toAnswerView, toQuestionView, toReportView, type CoachView, type DiagnosisLike } from './views';
+import { toAnswerView, toQuestionView, toReportView, type Attempt, type CoachView, type DiagnosisLike } from './views';
 
 // The three position values below are fixed by the plan. Everything else is spike filler:
 // the win % numbers, the refutation and the report rows are placeholders, not engine output.
@@ -24,8 +24,7 @@ const SPIKE_BEST_LINE_UCI = ['f8c5', 'c2c3', 'g8f6', 'd2d4'];
 const SPIKE_GAME_ID = 'spike-game';
 const SPIKE_PLY = 5; // 0-based: Black's 3rd move
 const PLACEHOLDER_WIN_BEFORE = 50;
-const PLACEHOLDER_WIN_AFTER_BEST = 50;
-const PLACEHOLDER_WIN_AFTER_OTHER = 41;
+const PLACEHOLDER_WIN_AFTER = 41;
 const PLACEHOLDER_REFUTATION_AFTER_NF6 = ['Ng5', 'd5', 'exd5'];
 const SPIKE_PROMPT = 'What would you play here, and what were you worried about?';
 const SPIKE_NOTE = '(Spike test data: these numbers are placeholders, not engine output.)';
@@ -36,23 +35,24 @@ function uciLineToSan(fen: string, uciMoves: string[]): string[] {
   return uciMoves.map((uci) => chess.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] }).san);
 }
 
-/**
- * Spike PositionFacts for playing `move` (SAN or UCI) in the spike position, or null if the move
- * is illegal there. Bc5 counts as best; anything else is a placeholder "mistake".
- */
-function spikeFacts(move: string): PositionFacts | null {
+/** UCI for a SAN or UCI move in the spike position, or null if it is illegal there. */
+function spikeAttempt(move: string): Attempt | null {
   const chess = new Chess(SPIKE_FEN);
-  let played;
   try {
-    played = /^[a-h][1-8][a-h][1-8][qrbn]?$/.test(move)
+    const m = /^[a-h][1-8][a-h][1-8][qrbn]?$/.test(move)
       ? chess.move({ from: move.slice(0, 2), to: move.slice(2, 4), promotion: move[4] })
       : chess.move(move);
+    return { moveSan: m.san, moveUci: m.from + m.to + (m.promotion ?? '') };
   } catch {
     return null;
   }
-  const playedUci = played.from + played.to + (played.promotion ?? '');
+}
+
+/** Spike PositionFacts for the game move (Nf6); Bc5 is the "best" move by fiat. */
+function spikeFacts(): PositionFacts {
+  const chess = new Chess(SPIKE_FEN);
+  const played = chess.move({ from: SPIKE_PLAYED_UCI.slice(0, 2), to: SPIKE_PLAYED_UCI.slice(2, 4) });
   const bestLineSan = uciLineToSan(SPIKE_FEN, SPIKE_BEST_LINE_UCI);
-  const isBest = playedUci === SPIKE_BEST_UCI;
   return {
     gameId: SPIKE_GAME_ID,
     ply: SPIKE_PLY,
@@ -60,22 +60,22 @@ function spikeFacts(move: string): PositionFacts | null {
     fenAfter: chess.fen(),
     mover: 'black',
     playedSan: played.san,
-    playedUci,
-    bestSan: isBest ? null : bestLineSan[0],
-    bestUci: isBest ? null : SPIKE_BEST_UCI,
+    playedUci: SPIKE_PLAYED_UCI,
+    bestSan: bestLineSan[0],
+    bestUci: SPIKE_BEST_UCI,
     bestLineSan,
-    refutationSan: playedUci === SPIKE_PLAYED_UCI ? PLACEHOLDER_REFUTATION_AFTER_NF6 : null,
+    refutationSan: PLACEHOLDER_REFUTATION_AFTER_NF6,
     winBefore: PLACEHOLDER_WIN_BEFORE,
-    winAfter: isBest ? PLACEHOLDER_WIN_AFTER_BEST : PLACEHOLDER_WIN_AFTER_OTHER,
-    classification: isBest ? 'best' : 'mistake',
+    winAfter: PLACEHOLDER_WIN_AFTER,
+    classification: 'mistake',
     reason: null,
     gameUrl: 'https://www.chess.com/',
   };
 }
 
-/** The answer view for a spike move, with the caption marked as test data. */
-function spikeAnswer(f: PositionFacts): CoachView {
-  const view = toAnswerView(f);
+/** The answer view for the spike position, with the caption marked as test data. */
+function spikeAnswer(f: PositionFacts, attempt?: Attempt): CoachView {
+  const view = toAnswerView(f, attempt);
   return view.kind === 'answer' ? { ...view, caption: `${view.caption} ${SPIKE_NOTE}` } : view;
 }
 
@@ -110,7 +110,7 @@ function buildServer(): McpServer {
       _meta: { ui: { resourceUri: BOARD_URI } },
     },
     async () => {
-      const facts = spikeFacts(SPIKE_PLAYED_UCI)!;
+      const facts = spikeFacts();
       const view = spikeAnswer(facts);
       const text =
         `Board test position (${facts.mover} to move): ${facts.fenBefore}. ` +
@@ -130,7 +130,7 @@ function buildServer(): McpServer {
       _meta: { ui: { resourceUri: BOARD_URI } },
     },
     async () => {
-      const view = toQuestionView(spikeFacts(SPIKE_PLAYED_UCI)!, SPIKE_PROMPT);
+      const view = toQuestionView(spikeFacts(), SPIKE_PROMPT);
       const text = `Question board test: Black to move in ${SPIKE_FEN} (game ${SPIKE_GAME_ID}, ply ${SPIKE_PLY}). Ask: ${SPIKE_PROMPT}`;
       return { content: [{ type: 'text', text }], structuredContent: { ...view } };
     },
@@ -152,15 +152,17 @@ function buildServer(): McpServer {
     },
   );
 
-  // SPIKE STUB of the real coach_check_move (plan Task C1b), so the question board can be
-  // exercised end to end. It scores nothing: Bc5 is "best" by fiat and the win % are placeholders.
+  // SPIKE STUB of the real coach_check_move (plan Task C1b). The question board never calls it
+  // (try-first is strict); the coach calls it after the player has said why, and its result
+  // shows the answer board with the player's attempt as "your move". It scores nothing: Bc5 is
+  // "best" by fiat, the game move is Nf6 and the win % are placeholders.
   registerAppTool(
     server,
     'coach_check_move',
     {
       title: 'Check a move (spike stub)',
       description:
-        'SPIKE STUB for the Postgame Coach board widget: "checks" a move the user played in the spike question position and returns the answer board. Fixed test data, no engine.',
+        'SPIKE STUB for the Postgame Coach board widget. After the user has played a move on the "ping the question" board and said why they chose it, call this with that move to show the answer board. Fixed test data, no engine.',
       inputSchema: {
         gameId: z.string().describe('Game id from the question view'),
         ply: z.number().int().describe('Ply from the question view'),
@@ -173,13 +175,16 @@ function buildServer(): McpServer {
       if (gameId !== SPIKE_GAME_ID || ply !== SPIKE_PLY) {
         return { isError: true, content: [{ type: 'text', text: `Spike stub only knows ${SPIKE_GAME_ID} ply ${SPIKE_PLY}.` }] };
       }
-      const facts = spikeFacts(moveSan);
-      if (!facts) {
+      const attempt = spikeAttempt(moveSan);
+      if (!attempt) {
         return { isError: true, content: [{ type: 'text', text: `${moveSan} is not a legal move in this position.` }] };
       }
-      const view = spikeAnswer(facts);
-      const verdict = facts.bestSan === null ? 'the best move (spike answer)' : `not the spike answer; best is ${facts.bestSan}`;
-      const text = `Spike check: ${facts.playedSan} is ${verdict}. Win % ${facts.winBefore} → ${facts.winAfter} are placeholders.`;
+      const facts = spikeFacts();
+      const view = spikeAnswer(facts, attempt);
+      const verdict = attempt.moveUci === SPIKE_BEST_UCI ? 'the best move (spike answer)' : `not the spike answer; best is ${facts.bestSan}`;
+      const text =
+        `Spike check: ${attempt.moveSan} is ${verdict}. In the game the move was ${facts.playedSan} ` +
+        `(win % ${facts.winBefore} → ${facts.winAfter}, placeholders).`;
       return { content: [{ type: 'text', text }], structuredContent: { ...view } };
     },
   );

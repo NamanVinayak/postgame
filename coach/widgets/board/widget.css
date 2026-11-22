@@ -72,6 +72,17 @@
   border: 1px solid var(--pg-border);
 }
 
+.pg-moved {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.pg-moved .pg-button {
+  flex: none;
+}
+
 /* Report card. */
 .pg-report {
   max-width: 600px;

@@ -54,32 +54,55 @@ export const MAX_REPORT_ROWS = 6;
 
 const round1 = (x: number) => Math.round(x * 10) / 10;
 
+/** A move the student tried on the question board (C1b's coach_check_move passes it in). */
+export interface Attempt {
+  moveSan: string;
+  moveUci: string;
+}
+
 /**
- * The board for one position with the answer: the played move (red arrow) against the best
- * move (green), the best line to step through, and a caption with the win chance before and
- * after. If the played move was the best one, `bestUci`/`bestSan` are null and the widget
- * draws the played move in green.
+ * The board for one position with the answer: the move shown as "your move" (red arrow)
+ * against the best move (green), the best line to step through, and a caption with the win
+ * chance. If the shown move is the best one, `bestUci`/`bestSan` are null and the widget draws
+ * it in green.
+ *
+ * Without `attempt`, "your move" is the game move. With an `attempt` that differs from the game
+ * move, "your move" is the attempt. The facts' win % and refutation belong to the game move,
+ * so the caption tells them as the game move's and `winAfter` is null.
  */
-export function toAnswerView(f: PositionFacts): CoachView {
-  const playedWasBest = f.bestUci === null || f.bestUci === f.playedUci;
-  const win = `Your win chance: ${Math.round(f.winBefore)}% before this move, ${Math.round(f.winAfter)}% after.`;
-  const parts = playedWasBest
-    ? [`${f.playedSan} was the best move here.`, win]
-    : [`You played ${f.playedSan}; the best move was ${f.bestSan ?? f.bestUci}.`, win];
-  if (!playedWasBest && f.reason) parts.push(f.reason);
-  if (!playedWasBest && f.refutationSan && f.refutationSan.length > 0) {
-    parts.push(`After ${f.playedSan}, their strongest reply is ${f.refutationSan.slice(0, 3).join(' ')}.`);
+export function toAnswerView(f: PositionFacts, attempt?: Attempt): CoachView {
+  // A null best in the facts means the game move was the best move.
+  const bestUci = f.bestUci ?? f.playedUci;
+  const bestSan = f.bestSan ?? f.playedSan;
+  const tried = attempt && attempt.moveUci !== f.playedUci ? attempt : null;
+  const shownUci = tried ? tried.moveUci : f.playedUci;
+  const shownSan = tried ? tried.moveSan : f.playedSan;
+  const shownWasBest = shownUci === bestUci;
+  const before = Math.round(f.winBefore);
+  const after = Math.round(f.winAfter);
+
+  const parts: string[] = [];
+  if (tried) {
+    parts.push(shownWasBest ? `${shownSan} is the best move here.` : `You tried ${shownSan}; the best move is ${bestSan}.`);
+    parts.push(`In the game you played ${f.playedSan}: your win chance went from ${before}% to ${after}%.`);
+  } else {
+    const win = `Your win chance: ${before}% before this move, ${after}% after.`;
+    parts.push(shownWasBest ? `${shownSan} was the best move here.` : `You played ${shownSan}; the best move was ${bestSan}.`, win);
+    if (!shownWasBest && f.reason) parts.push(f.reason);
+    if (!shownWasBest && f.refutationSan && f.refutationSan.length > 0) {
+      parts.push(`After ${shownSan}, their strongest reply is ${f.refutationSan.slice(0, 3).join(' ')}.`);
+    }
   }
   return {
     kind: 'answer',
     fen: f.fenBefore,
     orientation: f.mover,
-    playedUci: f.playedUci,
-    bestUci: playedWasBest ? null : f.bestUci,
-    playedSan: f.playedSan,
-    bestSan: playedWasBest ? null : f.bestSan,
+    playedUci: shownUci,
+    bestUci: shownWasBest ? null : bestUci,
+    playedSan: shownSan,
+    bestSan: shownWasBest ? null : bestSan,
     winBefore: f.winBefore,
-    winAfter: f.winAfter,
+    winAfter: tried ? null : f.winAfter,
     bestLineSan: f.bestLineSan,
     caption: parts.join(' '),
   };

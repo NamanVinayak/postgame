@@ -41,7 +41,8 @@ export function AnswerBoard({ view }: { view: AnswerView }) {
   if (step === 0) {
     const played = arrowFor(view.playedUci, playedWasBest ? BEST_ARROW : PLAYED_ARROW);
     const best = playedWasBest ? null : arrowFor(view.bestUci, BEST_ARROW);
-    arrows = [played, best].filter((a): a is Arrow => a !== null);
+    // Your move goes on top: on a shared line (Be7 vs Bc5) the shorter red arrow stays visible.
+    arrows = [best, played].filter((a): a is Arrow => a !== null);
   } else {
     const last = steps[step - 1];
     squareStyles = { [last.from]: LAST_MOVE, [last.to]: LAST_MOVE };
