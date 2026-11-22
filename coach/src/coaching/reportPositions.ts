@@ -18,6 +18,7 @@ import type { ReportPosition } from '../server/views';
 import { uciOf } from './explain';
 import { DRILLS_PER_POSITION, moveOutcome, parseAttempt, rightSessionsByBoard } from './lesson';
 import { commonOpening, openingName } from './openings';
+import type { SearchBudget } from './searchBudget';
 import type { StudentFile } from './student';
 
 export type { ReportPosition } from '../server/views';
@@ -47,12 +48,17 @@ function openingOf(r: RepeatedPosition, byId: Map<string, CachedGame>): string |
  * `wrongTimes` counts the wrong moves shown; `lossPts` is their deep loss, averaged over the
  * times each was played. `drillsDone` counts the sessions in the student file whose first try
  * at that board was right (default 0).
+ *
+ * `opts.skip` leaves out boards (position keys) the caller shows elsewhere, and the next
+ * positions take their place. With `opts.budget`, a search starts only while the budget allows
+ * one more; when it runs out, the positions ready so far are returned (`budget.ranOut` says so).
  */
 export async function buildReportPositions(
   d: Diagnosis,
   games: CachedGame[],
   displayEngine: DisplayEngine,
   student?: StudentFile,
+  opts: { skip?: Set<string>; budget?: SearchBudget } = {},
 ): Promise<ReportPosition[]> {
   const focusKeys = d.focus?.kind === 'repeated' ? d.focus.keys : [];
   const ordered = [
@@ -63,8 +69,10 @@ export async function buildReportPositions(
   const drilled = rightSessionsByBoard(student, byId);
 
   const out: ReportPosition[] = [];
-  for (const r of ordered.slice(0, MAX_POSITIONS_CHECKED)) {
+  const affordable = () => !opts.budget || opts.budget.canSpend(1);
+  for (const r of ordered.filter((x) => !opts.skip?.has(x.key)).slice(0, MAX_POSITIONS_CHECKED)) {
     if (out.length >= REPORT_POSITIONS) break;
+    if (!affordable()) break;
     const before = await displayEngine.evaluate(r.fen, DISPLAY_CFG.movetimeMs);
     const bestUci = before.bestMoveUci ?? before.pvUci?.[0] ?? null;
     const bestSan = bestUci ? (uciLineToSan(r.fen, [bestUci])?.[0] ?? null) : null;
@@ -73,15 +81,22 @@ export async function buildReportPositions(
 
     const wrong: { san: string; uci: string; times: number; deepLoss: number }[] = [];
     let checked = 0;
+    let cut = false;
     for (const u of r.usual) {
       if (checked >= MAX_MOVES_CHECKED) break;
       const m = parseAttempt(r.fen, u.move);
       if (!m || uciOf(m) === bestUci) continue; // the deep best is never "wrong"
+      if (!affordable()) {
+        cut = true;
+        break;
+      }
       checked++;
       const { win } = await moveOutcome(m, displayEngine);
       const deepLoss = Math.max(0, bestWin - win);
       if (deepLoss > REPEAT_CFG.wrongLossPts) wrong.push({ san: m.san, uci: uciOf(m), times: u.times, deepLoss });
     }
+    // A position whose moves weren't all checked waits for the next call (its numbers would be partial).
+    if (cut) break;
     if (wrong.length === 0) continue;
     // The numbers describe the wrong moves shown, so a move the deep check cleared isn't counted.
     const wrongTimes = wrong.reduce((n, w) => n + w.times, 0);

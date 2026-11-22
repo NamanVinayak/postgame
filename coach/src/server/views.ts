@@ -237,8 +237,11 @@ export interface Attempt {
  * Without `attempt`, "your move" is the game move. With an `attempt` that differs from the game
  * move, "your move" is the attempt. The facts' win % and refutation belong to the game move,
  * so the caption tells them as the game move's and `winAfter` is null.
+ *
+ * With `decimals`, the caption gives the win chances to one decimal (the caller asks for it near
+ * the 5-point line, so a wrong verdict never reads as within it).
  */
-export function toAnswerView(f: PositionFacts, attempt?: Attempt): CoachView {
+export function toAnswerView(f: PositionFacts, attempt?: Attempt, decimals = false): CoachView {
   // A null best in the facts means the game move was the best move.
   const bestUci = f.bestUci ?? f.playedUci;
   const bestSan = f.bestSan ?? f.playedSan;
@@ -246,8 +249,9 @@ export function toAnswerView(f: PositionFacts, attempt?: Attempt): CoachView {
   const shownUci = tried ? tried.moveUci : f.playedUci;
   const shownSan = tried ? tried.moveSan : f.playedSan;
   const shownWasBest = shownUci === bestUci;
-  const before = Math.round(f.winBefore);
-  const after = Math.round(f.winAfter);
+  const pct = (x: number) => (decimals ? x.toFixed(1) : String(Math.round(x)));
+  const before = pct(f.winBefore);
+  const after = pct(f.winAfter);
 
   const parts: string[] = [];
   if (tried) {

@@ -10,7 +10,8 @@
  *
  * Candidates come from the cached quick analysis only. A position is shown or asked only after a
  * deep check (DISPLAY_CFG) agrees it is worth asking (`teachableAs`). Deep checks are made lazily,
- * in order, and at most `maxChecks` new ones per call; results already known cost nothing.
+ * in order, within a search budget per call (`SearchBudget`): only searches that actually run
+ * count, so results already known (this session, or stored on disk) cost nothing.
  */
 import type { Classification } from '../../../src/types';
 import type { CachedGame } from '../analysis/cache';
@@ -21,6 +22,7 @@ import { positionKey } from '../diagnosis/repeated';
 import { KEEP_THE_WIN_PROMPT, PLAIN_PROMPT } from '../server/views';
 import { isTeachable, refKey, type Ref } from './lesson';
 import type { PositionFacts } from './positionFacts';
+import type { SearchBudget } from './searchBudget';
 import { firstTries, type StudentFile } from './student';
 
 /**
@@ -37,8 +39,17 @@ export interface LessonRef extends Ref {
   board: string;
 }
 
-/** Deep checks per call, at most (each takes one or two searches of about 1.5 s). */
+/** Deep checks per coach_ask_position call, at most (each takes up to two searches of about 1.5 s). */
 export const MAX_DEEP_CHECKS = 8;
+/** Searches one deep check makes at most (the position before the move, and after it). */
+export const SEARCHES_PER_CHECK = 2;
+/** Searches one coach_ask_position call may run: MAX_DEEP_CHECKS deep checks. */
+export const ASK_SEARCH_BUDGET = MAX_DEEP_CHECKS * SEARCHES_PER_CHECK;
+/**
+ * Searches one coach_report call may run, for its lesson boards and its quick fixes together
+ * (about 1.5 s each, so the call stays well inside a host's tool timeout).
+ */
+export const REPORT_SEARCH_BUDGET = 20;
 /** Lesson boards on the report card. */
 export const REPORT_LESSON_BOARDS = 3;
 /** "This week" for the drill count: sessions that started in the last 7 days. */
@@ -128,37 +139,50 @@ export function teachableAs(kind: LessonKind, quick: Classification, deep: Posit
   return kind === 'mistake' || deep.winBefore >= LEAK_CFG.winningWinPct;
 }
 
-/** The line above a question board: "keeps the win" only when the deep check says the player is winning there. */
+/**
+ * The line above a board asked by reference (an example, the warm-up): "keeps the win" only when
+ * the deep check says the player is winning there.
+ */
 export function lessonPrompt(deep: PositionFacts): string {
   return deep.winBefore >= LEAK_CFG.winningWinPct ? KEEP_THE_WIN_PROMPT : PLAIN_PROMPT;
+}
+
+/**
+ * The line above a board from the focus pool: "keeps the win" only for a keep-the-win position
+ * (which `teachableAs` already requires to be winning at depth); a board of the clock or a leak
+ * always gets the plain line, even when it is winning at depth.
+ */
+export function poolPrompt(ref: LessonRef): string {
+  return ref.kind === 'keepTheWin' ? KEEP_THE_WIN_PROMPT : PLAIN_PROMPT;
 }
 
 export interface PoolWalk {
   /** The teachable positions found, in pool order (at most `want`). */
   found: { ref: LessonRef; c: CachedGame; facts: PositionFacts }[];
-  /** New deep checks made by this walk. */
+  /** Deep checks made by this walk (positions not known this session). */
   checks: number;
-  /** True when the walk stopped at `maxChecks` with candidates still unchecked. */
+  /** True when the walk stopped at its search budget with candidates still unchecked. */
   capped: boolean;
 }
 
 export interface PoolWalkOptions {
   want: number;
-  maxChecks: number;
+  /** A deep check may start only while this allows SEARCHES_PER_CHECK more searches. */
+  budget: SearchBudget;
   load: (gameId: string) => CachedGame | null;
-  /** A deep result already known (costs no check), or undefined. */
+  /** A deep result already known this session (no check at all), or undefined. */
   known: (ref: Ref) => PositionFacts | undefined;
-  /** A new deep check (counts against maxChecks). Search failures are thrown. */
+  /** A deep check; only the searches it really runs use the budget. Search failures are thrown. */
   deep: (c: CachedGame, ply: number) => Promise<PositionFacts>;
   /** Positions (refKeys) and boards (position keys) to pass over. */
   exclude?: { refs: Set<string>; boards: Set<string> };
 }
 
 /**
- * Walks the pool in order until `want` teachable positions are found (`teachableAs`), making at
- * most `maxChecks` new deep checks; a result `known` already is used without counting. Passes
- * over excluded positions and boards, games that aren't cached or can't be replayed, and a
- * board already found.
+ * Walks the pool in order until `want` teachable positions are found (`teachableAs`). A deep
+ * check starts only while the budget allows SEARCHES_PER_CHECK more searches; a result `known`
+ * already is used without one. Passes over excluded positions and boards, games that aren't
+ * cached or can't be replayed, and a board already found.
  */
 export async function walkLessonPool(pool: LessonRef[], o: PoolWalkOptions): Promise<PoolWalk> {
   const found: PoolWalk['found'] = [];
@@ -172,7 +196,7 @@ export async function walkLessonPool(pool: LessonRef[], o: PoolWalkOptions): Pro
     if (!c || !quick || !gamePlies(c)?.[ref.ply]) continue;
     let facts = o.known(ref);
     if (!facts) {
-      if (checks >= o.maxChecks) return { found, checks, capped: true };
+      if (!o.budget.canSpend(SEARCHES_PER_CHECK)) return { found, checks, capped: true };
       checks++;
       facts = await o.deep(c, ref.ply);
     }

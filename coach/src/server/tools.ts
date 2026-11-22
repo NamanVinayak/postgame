@@ -40,16 +40,20 @@ import {
   type Ref,
 } from '../coaching/lesson';
 import {
+  ASK_SEARCH_BUDGET,
   MAX_DEEP_CHECKS,
   REPORT_LESSON_BOARDS,
+  REPORT_SEARCH_BUDGET,
   drillsDone,
   lessonCandidates,
   lessonPrompt,
+  poolPrompt,
   walkLessonPool,
   type LessonRef,
   type PoolWalk,
 } from '../coaching/lessonPool';
 import { buildReportPositions } from '../coaching/reportPositions';
+import { searchBudget, type SearchBudget } from '../coaching/searchBudget';
 import {
   addThinkingNote,
   firstTries,
@@ -116,6 +120,12 @@ export interface CoachDeps {
   leakReport?: typeof leakReport;
   /** The clock for student sessions (tests move it forward); default `Date.now`. */
   now?: () => number;
+  /**
+   * How many searches the display engine has really run (not answered from memory or its store
+   * on disk); it only grows. The per-call search budgets count with it. Default:
+   * `engineInfo().display.positionsSearched`.
+   */
+  displaySearches?: () => number;
 }
 
 /** A student's session ends after this long without a tool writing to it. */
@@ -546,6 +556,7 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
   const diagnoseFn = deps.diagnose ?? diagnose;
   const leakReportFn = deps.leakReport ?? leakReport;
   const now = deps.now ?? Date.now;
+  const displaySearches = deps.displaySearches ?? (() => deps.engineInfo().display.positionsSearched);
   const memo = new Map<string, Analysed>();
   /** Every deep search of this session, so a position always gets the same answer. */
   const searches: SearchMemo = new Map();
@@ -739,13 +750,18 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
     return { refs, boards };
   }
 
-  /** Walks the lesson's pool with this session's deep checks (at most MAX_DEEP_CHECKS new ones). */
-  function walkPool(lesson: Lesson, want: number, exclude: { refs: Set<string>; boards: Set<string> }): Promise<PoolWalk> {
+  /** Walks the lesson's pool with this session's deep checks, within `budget` (searches that really run). */
+  function walkPool(
+    lesson: Lesson,
+    want: number,
+    exclude: { refs: Set<string>; boards: Set<string> },
+    budget: SearchBudget,
+  ): Promise<PoolWalk> {
     const byId = new Map(lesson.a.games.map((c) => [c.game.id, c]));
     let engine: DisplayEngine | null = null;
     return walkLessonPool(poolOf(lesson.a), {
       want,
-      maxChecks: MAX_DEEP_CHECKS,
+      budget,
       load: (id) => byId.get(id) ?? readCached(id),
       known: knownFacts,
       deep: (c, ply) => deepCheck(c, ply, (engine ??= deepEngine())),
@@ -972,6 +988,12 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
     },
   );
 
+  /** The warm-up coach_me asks first in this student session (last session's position), or null. */
+  function warmUpOf(player: string, student: StudentFile | undefined): { gameId: string; ply: number } | null {
+    if (!student) return null;
+    return lastSessionSummary(student, openIndex(player, student) ?? student.sessions.length)?.warmUp ?? null;
+  }
+
   /** Boards the student has tried at any time (position keys): their quick fixes show the answer. */
   function triedBoards(student: StudentFile | undefined, boardOf: (gameId: string, ply: number) => string | null): Set<string> {
     const out = new Set<string>();
@@ -994,8 +1016,9 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
         "given away), one hero sentence, one context line, this week's focus with up to three lesson boards (no answers), " +
         'the drills done this week, and quick fixes (positions they keep getting wrong; answers hidden until tried). Call ' +
         'it once coach_diagnosis is done, with the same arguments; while games are still being analysed the board says so. ' +
-        `The lesson boards are checked with a deeper search first (at most ${MAX_DEEP_CHECKS} new checks per call; results ` +
-        'are kept, so later calls are quick). Also returns the card as text (show that only if the board did not appear). ' +
+        `The boards are checked with a deeper search first (at most ${REPORT_SEARCH_BUDGET} new searches per call for the ` +
+        'lesson boards and quick fixes together; results are kept, so later calls are quick and get further). Also returns ' +
+        'the card as text (show that only if the board did not appear). ' +
         "The boards are practice positions: coach_ask_position asks them; never name their moves first. " +
         NO_INVENTED_FACTS,
       inputSchema: {
@@ -1024,12 +1047,17 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
       const boardOf = boardKeyFinder(byId);
       const notes: string[] = [];
 
+      // One budget of searches that really run, for the lesson boards and the quick fixes together;
+      // the lesson boards may use at most ASK_SEARCH_BUDGET of it, so quick fixes always get some.
+      const budget = searchBudget(REPORT_SEARCH_BUDGET, displaySearches);
+
       // This week's lesson boards: the first teachable positions of the focus pool, checked lazily.
       const focus = hasLeakFocus(a.leak);
       let walk: PoolWalk | null = null;
       if (focus) {
         try {
-          walk = await walkPool(lesson, REPORT_LESSON_BOARDS, exclusions(lesson, student, false));
+          const lessonBudget = searchBudget(ASK_SEARCH_BUDGET, displaySearches, budget);
+          walk = await walkPool(lesson, REPORT_LESSON_BOARDS, exclusions(lesson, student, false), lessonBudget);
         } catch (e) {
           notes.push(`The lesson positions could not be checked just now (${msg(e)}), so the card shows none.`);
         }
@@ -1037,9 +1065,16 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
       const boards = walk?.found ?? [];
 
       // Quick fixes: the positions the player keeps getting wrong, the answer shown only once tried.
+      // A board that is also asked as a question (one of this card's lesson boards, or the warm-up
+      // the session re-asks first) is left out, so the card never shows its moves next to it.
+      const asked = new Set(boards.map((b) => b.ref.board));
+      const warm = warmUpOf(o.player, student);
+      const warmBoard = warm ? boardOf(warm.gameId, warm.ply) : null;
+      if (warmBoard) asked.add(warmBoard);
       let quickFixes: QuickFix[] = [];
       try {
-        const positions = a.d.repeated.length > 0 ? await buildReportPositions(a.d, a.games, deepEngine(), student) : [];
+        const positions =
+          a.d.repeated.length > 0 ? await buildReportPositions(a.d, a.games, deepEngine(), student, { skip: asked, budget }) : [];
         const tried = triedBoards(student, boardOf);
         quickFixes = positions.map((p) => quickFixFromPosition(p, tried.has(positionKey(p.fen))));
       } catch (e) {
@@ -1049,7 +1084,7 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
       const pool = poolOf(a);
       const done = drillsDone(student, pool, boardOf, now());
       const view = toReportView(a.leak, {
-        positions: boards.map((b) => ({ fen: b.facts.fenBefore, orientation: b.facts.mover, prompt: lessonPrompt(b.facts) })),
+        positions: boards.map((b) => ({ fen: b.facts.fenBefore, orientation: b.facts.mover, prompt: poolPrompt(b.ref) })),
         drillsDone: done,
         drillsTotal: LEAK_CFG.drillsPerWeek,
         quickFixes,
@@ -1068,7 +1103,7 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
         const n = boards.length;
         let ready = `This week: ${view.focus.title}. ${n === 0 ? 'No lesson positions are' : `${plural(n, 'lesson position')} ${n === 1 ? 'is' : 'are'}`} ready on the card`;
         if (walk?.capped && n < REPORT_LESSON_BOARDS) {
-          ready += ` so far (the deeper check looked at ${plural(walk.checks, 'new position')} this time; a later call checks more)`;
+          ready += ` so far (the deeper check looked at ${plural(walk.checks, 'new position')} this time)`;
         }
         lines.push(`${ready}. Drills this week: ${view.focus.drillsDone} of ${view.focus.drillsTotal}.`);
         if (n > 0) {
@@ -1086,6 +1121,12 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
           `Quick fixes on the card: ${plural(quickFixes.length, 'position')} you keep reaching and getting wrong; ` +
             (shown > 0 ? `${shown} already tried (its answer shows), the others hidden until tried. ` : 'answers hidden until tried. ') +
             "Don't name any move in them.",
+        );
+      }
+      if (budget.ranOut || walk?.capped) {
+        lines.push(
+          `This call stopped at its limit of deeper searches (${REPORT_SEARCH_BUDGET} at most), so the card shows what is ` +
+            'ready; more positions get ready next time (results are kept, so they cost nothing again).',
         );
       }
       lines.push(
@@ -1150,7 +1191,7 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
         'focus (from the last coach_report or coach_diagnosis), skipping ones already asked this session, up to about six ' +
         'a session. With them it asks that position: the warm-up from coach_student, or a position the player picked from ' +
         "their games (it must be the player's own move). Each position is checked with a deeper search first and only asked " +
-        `if the game move really was a mistake there; at most ${MAX_DEEP_CHECKS} positions are checked per call, so this ` +
+        `if the game move really was a mistake there; at most ${MAX_DEEP_CHECKS} new positions are searched per call, so this ` +
         'can take a few seconds. The line above the board is "You\'re winning here. Find the move that keeps it." only when ' +
         'the deeper check says the player is winning there, else "Find a better move here." When the board says no ' +
         'position is ready, there are no more, the move held up, or it is ' +
@@ -1177,9 +1218,8 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
       if (lesson) lessonSession(lesson);
       // The line above the board comes from the deep check only (never from the caller), so
       // "You're winning here" is never shown over a position that isn't winning at depth.
-      const ask = (facts: PositionFacts) => {
+      const ask = (facts: PositionFacts, line: string) => {
         lesson?.asked.add(refKey(facts.gameId, facts.ply));
-        const line = lessonPrompt(facts);
         return reply(questionText(facts, line), { ...toQuestionView(facts, line) });
       };
       /** The calm card for an ending (no board, no error), with the model's instructions in the text. */
@@ -1205,7 +1245,8 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
               'example, or call coach_ask_position without gameId and ply for the next practice position.',
           );
         }
-        return ask(facts);
+        // Asked by reference: "keeps the win" only when the deep check says the player is winning there.
+        return ask(facts, lessonPrompt(facts));
       }
 
       if (!lesson) {
@@ -1223,7 +1264,12 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
       }
       let walk: PoolWalk;
       try {
-        walk = await walkPool(lesson, 1, exclusions(lesson, studentOrNothing(lesson.player), true));
+        walk = await walkPool(
+          lesson,
+          1,
+          exclusions(lesson, studentOrNothing(lesson.player), true),
+          searchBudget(ASK_SEARCH_BUDGET, displaySearches),
+        );
       } catch (e) {
         return failure(`Could not check the next position: ${msg(e)}`);
       }
@@ -1232,8 +1278,8 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
         if (walk.capped) {
           return status(
             'No position ready yet',
-            `No ready position was found this time: the deeper check looked at ${plural(walk.checks, 'position')} and the ` +
-              'game move held up in each.',
+            `No ready position was found this time: the deeper check looked at ${plural(walk.checks, 'position')} and ` +
+              'none of them was ready to ask.',
             'Call coach_ask_position again to check the next ones, or move on; never show a position that was not checked.',
           );
         }
@@ -1244,7 +1290,8 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
         );
       }
       lesson.picked++;
-      return ask(found.facts);
+      // From the focus pool: "keeps the win" only for a keep-the-win position, never for the clock or a leak.
+      return ask(found.facts, poolPrompt(found.ref));
     },
   );
 
@@ -1326,8 +1373,11 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
       } catch (e) {
         tally = `Not recorded in the student file: ${msg(e)}.`;
       }
+      // The board agrees with the verdict: the position's value is the shown best win chance and, when
+      // the try is the game move, its win chance after is the shown one too, to one decimal near the line.
+      const shownFacts = { ...r.facts, winBefore: shown.bestWin, ...(r.isGameMove ? { winAfter: shown.attemptWin } : {}) };
       return reply(checkText(r, tally), {
-        ...toAnswerView(r.facts, r.attempt),
+        ...toAnswerView(shownFacts, r.attempt, shown.decimals && r.isGameMove),
         correct: r.correct,
         lossPts: shown.lossPts,
         attemptWin: shown.attemptWin,

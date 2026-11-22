@@ -5,10 +5,12 @@ import { gamePlies } from '../diagnosis/areas';
 import { positionKey } from '../diagnosis/repeated';
 import { fixtureGame, randomSans } from '../diagnosis/testGames';
 import { refKey } from './lesson';
+import { searchBudget } from './searchBudget';
 import {
   drillsDone,
   lessonCandidates,
   lessonPrompt,
+  poolPrompt,
   teachableAs,
   walkLessonPool,
   type LessonRef,
@@ -103,6 +105,11 @@ describe('teachableAs and lessonPrompt', () => {
   it('keepTheWinPromptOnlyWhenWinningAtDepth', () => {
     expect(lessonPrompt(facts({ winBefore: 75 }))).toBe("You're winning here. Find the move that keeps it.");
     expect(lessonPrompt(facts({ winBefore: 74.9 }))).toBe('Find a better move here.');
+    // A pool board gets the keep-the-win line only as a keep-the-win position, never for the clock or a leak.
+    const ref = { gameId: 'g', ply: 6, board: 'b' };
+    expect(poolPrompt({ ...ref, kind: 'keepTheWin' })).toBe("You're winning here. Find the move that keeps it.");
+    expect(poolPrompt({ ...ref, kind: 'mistake' })).toBe('Find a better move here.');
+    expect(poolPrompt({ ...ref, kind: 'repeated' })).toBe('Find a better move here.');
   });
 });
 
@@ -114,13 +121,15 @@ describe('walkLessonPool', () => {
   it('capCountsOnlyNewDeepChecks', async () => {
     const deepCalls: string[] = [];
     const store = new Map<string, PositionFacts>();
+    let searches = 0; // the engine's count of searches really run
     const opts = (want: number) => ({
       want,
-      maxChecks: 8,
+      budget: searchBudget(16, () => searches),
       load: (id: string) => byId.get(id) ?? null,
       known: (r: { gameId: string; ply: number }) => store.get(refKey(r.gameId, r.ply)),
       deep: async (c: CachedGame, ply: number) => {
         deepCalls.push(c.game.id);
+        searches += 2; // before and after the move
         // Every position held up at depth except the oldest game's (the last in the pool).
         const f = c.game.id === 'g0' ? facts() : facts({ bestSan: null, bestUci: null, classification: 'best' });
         store.set(refKey(c.game.id, ply), f);
@@ -128,8 +137,10 @@ describe('walkLessonPool', () => {
       },
     });
     expect(pool.map((r) => r.gameId)).toEqual(['g11', 'g10', 'g9', 'g8', 'g7', 'g6', 'g5', 'g4', 'g3', 'g2', 'g1', 'g0']);
-    const first = await walkLessonPool(pool, opts(3));
+    const firstOpts = opts(3);
+    const first = await walkLessonPool(pool, firstOpts);
     expect(first).toMatchObject({ found: [], checks: 8, capped: true });
+    expect(firstOpts.budget.ranOut).toBe(true);
     // The next walk re-reads the first eight for free and checks the rest.
     const second = await walkLessonPool(pool, opts(3));
     expect(second.checks).toBe(4);
@@ -138,11 +149,35 @@ describe('walkLessonPool', () => {
     expect(deepCalls).toHaveLength(12);
   });
 
+  it('resultsStoredOnDiskCostNothing', async () => {
+    // After a restart nothing is known in memory, but the engine answers every position from its
+    // store on disk: no search runs, so the budget lets the walk go through the whole pool.
+    let searches = 0;
+    const budget = searchBudget(16, () => searches);
+    const held = facts({ bestSan: null, bestUci: null, classification: 'best' });
+    const walk = await walkLessonPool(pool, {
+      want: 3,
+      budget,
+      load: (id) => byId.get(id) ?? null,
+      known: () => undefined,
+      deep: async () => held, // from the store: the search count doesn't move
+    });
+    expect(walk).toMatchObject({ found: [], checks: 12, capped: false });
+    expect(budget.ranOut).toBe(false);
+    // A parent budget limits a child one too.
+    const parent = searchBudget(3, () => searches);
+    const child = searchBudget(16, () => searches, parent);
+    expect(child.canSpend(2)).toBe(true);
+    searches += 2;
+    expect(child.canSpend(2)).toBe(false);
+    expect(parent.ranOut && child.ranOut).toBe(true);
+  });
+
   it('skipsExcludedPositionsAndBoardsAndStopsAtWant', async () => {
     const exclude = { refs: new Set([refKey(pool[0].gameId, pool[0].ply)]), boards: new Set([pool[1].board]) };
     const walk = await walkLessonPool(pool, {
       want: 2,
-      maxChecks: 8,
+      budget: searchBudget(16, () => 0),
       load: (id) => byId.get(id) ?? null,
       known: () => undefined,
       deep: async () => facts(),

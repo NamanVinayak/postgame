@@ -71,8 +71,11 @@ export function areaContext(d: Diagnosis): string | null {
   return `${AGAINST}, no part of your game stands out (${plural(d.games, 'game')}).`;
 }
 
-/** "Clearly winning", in the words the player reads. */
-const CLEARLY_WINNING = `winning chances of ${LEAK_CFG.winningWinPct}% or more on two of your moves in a row`;
+const NUMBER_WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+/** "Clearly winning", in the words the player reads (LEAK_CFG's sustained rule). */
+const CLEARLY_WINNING =
+  `winning chances of ${LEAK_CFG.winningWinPct}% or more on ` +
+  `${NUMBER_WORDS[LEAK_CFG.winningConsecutive] ?? LEAK_CFG.winningConsecutive} of your moves in a row`;
 
 /** Notes the text already says in its own words. */
 const RESTATED = [/^Clearly winning means/, /^For context: when your opponents/, /^With fewer than \d+ games, the ranges/];
