@@ -31,7 +31,8 @@ export interface Ref {
 /** A position's reference as one string, for exclude lists: "<gameId>#<ply>". */
 export const refKey = (gameId: string, ply: number): string => `${gameId}#${ply}`;
 
-function parseRefKey(k: string): Ref | null {
+/** A refKey read back; null when it isn't one. */
+export function parseRefKey(k: string): Ref | null {
   const i = k.lastIndexOf('#');
   const ply = Number(k.slice(i + 1));
   return i > 0 && Number.isInteger(ply) ? { gameId: k.slice(0, i), ply } : null;
@@ -146,6 +147,41 @@ export async function checkMove(c: CachedGame, ply: number, moveSan: string, eng
     isGameMove,
     attemptRefutationSan,
   };
+}
+
+const round1 = (x: number) => Math.round(x * 10) / 10;
+/** Up / down to one decimal, ignoring float noise (5.1 stays 5.1). */
+const ceil1 = (x: number) => Math.ceil(x * 10 - 1e-9) / 10;
+const floor1 = (x: number) => Math.floor(x * 10 + 1e-9) / 10;
+
+/** The numbers a scored try shows (text, structuredContent and the student file). */
+export interface ShownNumbers {
+  /** Win-% points lost against the best move. */
+  lossPts: number;
+  /** The mover's win % after the try, and with the best move. */
+  attemptWin: number;
+  bestWin: number;
+  /** True near the line: the text then shows all three to one decimal instead of whole numbers. */
+  decimals: boolean;
+}
+
+/**
+ * A scored try's numbers, to one decimal, rounded so a WRONG verdict never reads as within the
+ * REPEAT_CFG.wrongLossPts line. Near the line (a wrong try losing less than the line + 1), the
+ * loss is rounded UP (a true 5.04 shows as 5.1, never "5.0" or "5") and the win chances are shown
+ * to one decimal, the best one rounded up and the try's rounded down, so their gap never reads as
+ * 5 or less either; whole numbers would (57.4 and 51.8 round to 57 and 52). Otherwise each is
+ * rounded to one decimal, and the text may round them to whole numbers.
+ */
+export function shownNumbers(r: { correct: boolean; lossPts: number; attemptWin: number; bestWin: number }): ShownNumbers {
+  const line = REPEAT_CFG.wrongLossPts;
+  if (r.correct || r.lossPts >= line + 1) {
+    return { lossPts: round1(r.lossPts), attemptWin: round1(r.attemptWin), bestWin: round1(r.bestWin), decimals: false };
+  }
+  const lossPts = Math.max(ceil1(r.lossPts), round1(line + 0.1));
+  const attemptWin = floor1(r.attemptWin);
+  const bestWin = Math.max(ceil1(r.bestWin), round1(attemptWin + lossPts));
+  return { lossPts, attemptWin, bestWin, decimals: true };
 }
 
 /**

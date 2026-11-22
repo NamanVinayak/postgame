@@ -703,6 +703,27 @@ describe('report card v4, review fixes', () => {
     expect(card.quickFixes?.[0].label.length).toBeLessThanOrEqual(80);
   });
 
+  it('lessonPromptsArePlainOutsideKeepTheWin', () => {
+    // "Find the best move" would claim one right answer; right means within 5% of the best.
+    for (const focus of [{ kind: 'clock' as const }, { kind: 'leak' as const, key: 'middlegame' as const }]) {
+      const view = v4(toReportView(spikeReport({ focus }), { positions: [board()] }));
+      expect(view.focus.positions[0].prompt).toBe('Find a better move here.');
+    }
+    expect(v4(toReportView(spikeReport(), { positions: [board()] })).focus.positions[0].prompt).toBe(
+      "You're winning here. Find the move that keeps it.",
+    );
+  });
+
+  it('noGamesHeroNamesNoLeak', () => {
+    // Nothing given away (no games yet): no "biggest leak … 0%".
+    const zero = spikeReport({
+      games: 0,
+      leaks: spikeReport().leaks.map((l) => ({ ...l, sharePct: 0, shareRange: [0, 0] as [number, number] })),
+      focus: { kind: 'leak', key: 'middlegame' },
+    });
+    expect(v4(toReportView(zero)).hero).toEqual({ headline: 'Not enough games yet to say where your points go.', sub: '' });
+  });
+
   it('parseReturnsSanitisedReportCopy', () => {
     const clean = v4(toReportView(spikeReport(), { positions: [board()], quickFixes: [quick(false)], cta: 'Go' }));
     const dirty = {
