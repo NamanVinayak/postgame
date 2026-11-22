@@ -10,6 +10,8 @@
  */
 import type { Color } from '../../../src/types';
 import type { PositionFacts } from '../coaching/positionFacts';
+import type { ExampleSource } from '../diagnosis/examples';
+import type { LeakKey } from '../diagnosis/leaks';
 import type { BoardView } from './boardResource';
 
 /**
@@ -44,6 +46,8 @@ export interface ReportPosition {
 export interface ReportHero {
   headline: string;
   sub: string;
+  /** The coach_examples source behind the hero (the games it counts); absent when it names none. */
+  source?: ExampleSource;
 }
 
 /** One bar of "Where your points go": a share of everything the player gave away. */
@@ -56,6 +60,8 @@ export interface ReportLeak {
   range: [number, number];
   /** One plain line, e.g. "about 1.8 big mistakes a game"; may be empty. */
   detail: string;
+  /** The situation, as coach_examples takes it for `source`. */
+  key?: LeakKey;
 }
 
 /** A board for this week's lesson. It carries no answer: no best move, no played move. */
@@ -91,6 +97,20 @@ export interface QuickFix {
   revealed: boolean;
   bestSan: string | null;
   bestUci: string | null;
+  /** The position's key (board, side to move, castling, en passant), as coach_examples takes it with source 'quickFix'. */
+  key?: string;
+}
+
+/**
+ * What coach_report was called with, so the widget can ask coach_examples about the same games
+ * (it passes these straight on).
+ */
+export interface ReportQuery {
+  timeClass: string;
+  accounts?: { username: string; maxGames: number }[];
+  usernames?: string[];
+  maxGames?: number;
+  asOf?: string;
 }
 
 /** The report card, v4 (spec §6c). */
@@ -110,6 +130,8 @@ export interface ReportView {
   rangesReliable?: boolean;
   /** The training button's label; the widget defaults to DEFAULT_REPORT_CTA. */
   cta?: string;
+  /** The games the card is about, for coach_examples (the drill-down). */
+  query?: ReportQuery;
 }
 
 /** How far a long job has got, e.g. 312 of 900 games analysed. */
@@ -172,6 +194,8 @@ export interface ReportV4Extras {
   /** Replaces the context line the mapper writes. */
   context?: string;
   cta?: string;
+  /** What coach_report was called with (kept only if well formed). */
+  query?: ReportQuery;
 }
 
 /** At most this many usual wrong moves per position. */
@@ -360,6 +384,9 @@ function conversionContext(c: LeakReportLike['conversion']): string {
 
 const round5 = (x: number) => Math.round(x / 5) * 5;
 
+/** A position's key: its first four FEN fields (as diagnosis/repeated's positionKey, which this file can't import). */
+const boardKey = (fen: string) => fen.split(' ', 4).join(' ');
+
 /** A quick fix from a repeated position. The answer is kept only once revealed. */
 export function quickFixFromPosition(p: ReportPosition, revealed: boolean): QuickFix {
   return {
@@ -372,12 +399,13 @@ export function quickFixFromPosition(p: ReportPosition, revealed: boolean): Quic
     revealed,
     bestSan: revealed ? p.bestSan : null,
     bestUci: revealed ? p.bestUci : null,
+    key: boardKey(p.fen),
   };
 }
 
 /** A quick fix rebuilt from an explicit list of fields, with the answer blanked unless revealed. */
 function cleanQuickFix(q: QuickFix): QuickFix {
-  return {
+  const out: QuickFix = {
     fen: q.fen,
     orientation: q.orientation,
     label: q.label,
@@ -388,6 +416,18 @@ function cleanQuickFix(q: QuickFix): QuickFix {
     bestSan: q.revealed === true ? q.bestSan : null,
     bestUci: q.revealed === true ? q.bestUci : null,
   };
+  if (q.key !== undefined) out.key = q.key;
+  return out;
+}
+
+/** A query rebuilt from its known fields only. Call only after isQuery. */
+function cleanQuery(q: ReportQuery): ReportQuery {
+  const out: ReportQuery = { timeClass: q.timeClass };
+  if (q.accounts !== undefined) out.accounts = q.accounts.map((a) => ({ username: a.username, maxGames: a.maxGames }));
+  if (q.usernames !== undefined) out.usernames = [...q.usernames];
+  if (q.maxGames !== undefined) out.maxGames = q.maxGames;
+  if (q.asOf !== undefined) out.asOf = q.asOf;
+  return out;
 }
 
 /**
@@ -415,7 +455,9 @@ function reportV4(r: LeakReportLike, x: ReportV4Extras): ReportView {
     const clamp = (v: number) => Math.min(100, Math.max(0, Math.round(v)));
     const lo = clamp(Math.min(l.shareRange[0], l.shareRange[1]));
     const hi = clamp(Math.max(l.shareRange[0], l.shareRange[1]));
-    return { label: l.label, sharePct: clamp(l.sharePct), range: [lo, hi], detail };
+    const bar: ReportLeak = { label: l.label, sharePct: clamp(l.sharePct), range: [lo, hi], detail };
+    if (isLeakKey(l.key)) bar.key = l.key;
+    return bar;
   });
 
   const f = r.focus;
@@ -429,7 +471,7 @@ function reportV4(r: LeakReportLike, x: ReportV4Extras): ReportView {
   let context: string | undefined;
   let estimate: string | undefined;
   if (f.kind === 'keepTheWin') {
-    hero = heroFromConversion(r.conversion);
+    hero = { ...heroFromConversion(r.conversion), source: 'thrownWins' };
     title = 'Keep the win';
     line = `${many(total)} where you were winning and let it slip.`;
     prompt = KEEP_THE_WIN_PROMPT;
@@ -437,13 +479,14 @@ function reportV4(r: LeakReportLike, x: ReportV4Extras): ReportView {
     const pts = r.whatIf ? round5(r.whatIf.ratingPoints) : 0;
     if (pts > 0) estimate = `About +${pts} rating points if you halve them (rough estimate)`;
   } else if (f.kind === 'clock') {
-    hero = heroFromTimeLosses(r.timeLosses);
+    hero = { ...heroFromTimeLosses(r.timeLosses), source: 'clock' };
     title = 'Beat the clock';
     line = `${many(total)} where your clock was low and a move slipped.`;
     prompt = PLAIN_PROMPT;
   } else {
     const leak = r.leaks.find((l) => l.key === f.key);
     hero = heroFromLeak(leak, ranked[0]?.key === f.key);
+    if (leak && leak.sharePct > 0 && isLeakKey(f.key)) hero.source = f.key;
     title = leak?.label ?? 'This week';
     line = `${many(total)} where a move cost you${leak ? ` (${leak.label.toLowerCase()})` : ''}.`;
     prompt = PLAIN_PROMPT;
@@ -464,6 +507,7 @@ function reportV4(r: LeakReportLike, x: ReportV4Extras): ReportView {
   }
   if (typeof r.rangesReliable === 'boolean') view.rangesReliable = r.rangesReliable;
   if (isCta(x.cta)) view.cta = x.cta;
+  if (x.query !== undefined && isQuery(x.query)) view.query = cleanQuery(x.query);
   return view;
 }
 
@@ -549,7 +593,35 @@ function isFocusPosition(p: unknown): p is FocusPosition {
   return isObj(p) && hasOnlyKeys(p, FOCUS_KEYS) && isFen(p.fen) && isColor(p.orientation) && isText(p.prompt, MAX_LABEL_TEXT * 2) && p.prompt.length > 0;
 }
 
-const QUICK_FIX_KEYS = ['fen', 'orientation', 'label', 'times', 'wrongSan', 'wrongUci', 'revealed', 'bestSan', 'bestUci'] as const;
+/** The situations coach_examples takes as a source (diagnosis/leaks' LEAK_KEYS, which this file can't import). */
+const LEAK_KEY_LIST: readonly string[] = ['clock', 'winning', 'losing', 'opening', 'endgame', 'middlegame'];
+const isLeakKey = (x: unknown): x is LeakKey => isStr(x) && LEAK_KEY_LIST.includes(x);
+const isExampleSource = (x: unknown): x is ExampleSource => x === 'thrownWins' || x === 'quickFix' || isLeakKey(x);
+const MAX_KEY_TEXT = 100;
+const MAX_ACCOUNTS = 10;
+const isGameCount = (x: unknown): x is number => isCount(x) && x >= 1 && x <= 1000;
+const isName = (x: unknown): x is string => isStr(x) && x.length > 0 && x.length <= 50;
+
+function isQuery(q: unknown): q is ReportQuery {
+  if (!isObj(q) || !isText(q.timeClass, MAX_TIME_CLASS) || q.timeClass.length === 0) return false;
+  const accountsOk =
+    q.accounts === undefined ||
+    (Array.isArray(q.accounts) &&
+      q.accounts.length >= 1 &&
+      q.accounts.length <= MAX_ACCOUNTS &&
+      q.accounts.every((a) => isObj(a) && isName(a.username) && isGameCount(a.maxGames)));
+  const usernamesOk =
+    q.usernames === undefined ||
+    (Array.isArray(q.usernames) && q.usernames.length >= 1 && q.usernames.length <= MAX_ACCOUNTS && q.usernames.every(isName));
+  return (
+    accountsOk &&
+    usernamesOk &&
+    (q.maxGames === undefined || isGameCount(q.maxGames)) &&
+    (q.asOf === undefined || (isStr(q.asOf) && /^\d{4}-\d{2}-\d{2}$/.test(q.asOf)))
+  );
+}
+
+const QUICK_FIX_KEYS = ['fen', 'orientation', 'label', 'times', 'wrongSan', 'wrongUci', 'revealed', 'bestSan', 'bestUci', 'key'] as const;
 function isQuickFix(q: unknown): q is QuickFix {
   if (!isObj(q) || !hasOnlyKeys(q, QUICK_FIX_KEYS)) return false;
   const shapeOk =
@@ -562,7 +634,8 @@ function isQuickFix(q: unknown): q is QuickFix {
     q.wrongSan.length <= MAX_WRONG_MOVES &&
     q.wrongSan.every((s) => isStr(s) && SAN.test(s)) &&
     (q.wrongUci === null || (isStr(q.wrongUci) && UCI.test(q.wrongUci))) &&
-    typeof q.revealed === 'boolean';
+    typeof q.revealed === 'boolean' &&
+    (q.key === undefined || (isText(q.key, MAX_KEY_TEXT) && q.key.length > 0));
   if (!shapeOk) return false;
   // The answer is there only once revealed (and then as a real move, or not at all).
   if (!q.revealed) return q.bestSan === null && q.bestUci === null;
@@ -580,7 +653,8 @@ function isLeak(l: unknown): l is ReportLeak {
     isPct(l.range[0]) &&
     isPct(l.range[1]) &&
     l.range[0] <= l.range[1] &&
-    isText(l.detail, MAX_DETAIL_TEXT)
+    isText(l.detail, MAX_DETAIL_TEXT) &&
+    (l.key === undefined || isLeakKey(l.key))
   );
 }
 
@@ -609,6 +683,7 @@ function isReportV4(v: Obj): boolean {
     isText(hero.headline, MAX_HERO_TEXT) &&
     hero.headline.length > 0 &&
     isText(hero.sub, MAX_HERO_TEXT) &&
+    (hero.source === undefined || isExampleSource(hero.source)) &&
     Array.isArray(v.leaks) &&
     v.leaks.length <= MAX_REPORT_LEAKS &&
     v.leaks.every(isLeak) &&
@@ -619,7 +694,8 @@ function isReportV4(v: Obj): boolean {
     (v.quickFixes === undefined ||
       (Array.isArray(v.quickFixes) && v.quickFixes.length <= MAX_QUICK_FIXES && v.quickFixes.every(isQuickFix))) &&
     (v.rangesReliable === undefined || typeof v.rangesReliable === 'boolean') &&
-    (v.cta === undefined || isCta(v.cta))
+    (v.cta === undefined || isCta(v.cta)) &&
+    (v.query === undefined || isQuery(v.query))
   );
 }
 
@@ -642,13 +718,19 @@ function cleanReportV4(v: ReportView): ReportView {
     games: v.games,
     timeClass: v.timeClass,
     hero: { headline: v.hero.headline, sub: v.hero.sub },
-    leaks: v.leaks.map((l) => ({ label: l.label, sharePct: l.sharePct, range: [l.range[0], l.range[1]], detail: l.detail })),
+    leaks: v.leaks.map((l) => {
+      const bar: ReportLeak = { label: l.label, sharePct: l.sharePct, range: [l.range[0], l.range[1]], detail: l.detail };
+      if (l.key !== undefined) bar.key = l.key;
+      return bar;
+    }),
     focus,
   };
+  if (v.hero.source !== undefined) out.hero.source = v.hero.source;
   if (v.context !== undefined) out.context = v.context;
   if (v.quickFixes !== undefined) out.quickFixes = v.quickFixes.map(cleanQuickFix);
   if (v.rangesReliable !== undefined) out.rangesReliable = v.rangesReliable;
   if (v.cta !== undefined) out.cta = v.cta;
+  if (v.query !== undefined) out.query = cleanQuery(v.query);
   return out;
 }
 

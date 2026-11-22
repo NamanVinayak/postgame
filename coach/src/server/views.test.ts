@@ -339,6 +339,7 @@ describe('report card v4', () => {
     expect(view.hero).toEqual({
       headline: 'You were winning in 493 games, and lost 142 of them.',
       sub: '1 in 3 of your losses were games you were winning.',
+      source: 'thrownWins',
     });
     expect(view.leaks.map((l) => [l.label, l.sharePct, l.range, l.detail])).toEqual([
       ['Balanced middlegames', 35, [32, 38], 'About 2 costly moves per game'],
@@ -368,11 +369,11 @@ describe('report card v4', () => {
 
     // The other focus kinds use their own stat for the hero, and never the "halve them" estimate.
     const clock = v4(toReportView(spikeReport({ focus: { kind: 'clock' } })));
-    expect(clock.hero).toEqual({ headline: '72 of your 448 losses were on time.', sub: '1 in 6 of your losses came from the clock, not the board.' });
+    expect(clock.hero).toEqual({ headline: '72 of your 448 losses were on time.', sub: '1 in 6 of your losses came from the clock, not the board.', source: 'clock' });
     expect(clock.focus.title).toBe('Beat the clock');
     expect(clock.focus.estimate).toBeUndefined();
     const mid = v4(toReportView(spikeReport({ focus: { kind: 'leak', key: 'middlegame' } })));
-    expect(mid.hero).toEqual({ headline: 'Your biggest leak: balanced middlegames.', sub: '35% of the win chance you give away happens here.' });
+    expect(mid.hero).toEqual({ headline: 'Your biggest leak: balanced middlegames.', sub: '35% of the win chance you give away happens here.', source: 'middlegame' });
     expect(mid.focus.estimate).toBeUndefined();
     for (const v of [clock, mid]) expect(parseCoachView(JSON.parse(JSON.stringify(v)))).toEqual(v);
     // Plain words only.
@@ -461,10 +462,10 @@ describe('report card v4, review fixes', () => {
   it('heroNamesFocusLeakWithoutMajorityClaim', () => {
     // The top bar is 35%: a leak, not a majority, so no "one place" or "most".
     const top = v4(toReportView(spikeReport({ focus: { kind: 'leak', key: 'middlegame' } })));
-    expect(top.hero).toEqual({ headline: 'Your biggest leak: balanced middlegames.', sub: '35% of the win chance you give away happens here.' });
+    expect(top.hero).toEqual({ headline: 'Your biggest leak: balanced middlegames.', sub: '35% of the win chance you give away happens here.', source: 'middlegame' });
     // The focus is the second-ranked bar: it is this week's focus, not the biggest leak.
     const second = v4(toReportView(spikeReport({ focus: { kind: 'leak', key: 'winning' } })));
-    expect(second.hero).toEqual({ headline: "Your focus this week: when you're already winning.", sub: '24% of the win chance you give away happens here.' });
+    expect(second.hero).toEqual({ headline: "Your focus this week: when you're already winning.", sub: '24% of the win chance you give away happens here.', source: 'winning' });
     for (const h of [top.hero, second.hero]) expect(`${h.headline} ${h.sub}`).not.toMatch(/one place|most|majority|biggest leak: when/i);
   });
 
@@ -525,6 +526,38 @@ describe('report card v4, review fixes', () => {
       focus: { kind: 'leak', key: 'middlegame' },
     });
     expect(v4(toReportView(zero)).hero).toEqual({ headline: 'Not enough games yet to say where your points go.', sub: '' });
+  });
+
+  it('reportCarriesDrillRefs', () => {
+    const query = { timeClass: 'blitz', accounts: [{ username: 'alice', maxGames: 300 }, { username: 'alice2', maxGames: 600 }], maxGames: 300 };
+    const view = v4(toReportView(spikeReport(), { quickFixes: [quickFixFromPosition(position(), false)], query }));
+    // Each bar opens its own situation, the hero the focus's source, a quick fix its position.
+    expect(view.leaks.map((l) => l.key)).toEqual(['middlegame', 'winning', 'opening', 'clock', 'losing', 'endgame']);
+    expect(view.hero.source).toBe('thrownWins');
+    expect(view.quickFixes?.[0].key).toBe('r1bqkbnr/pp1p1ppp/2n1p3/8/3NP3/2N5/PPP2PPP/R1BQKB1R b KQkq -');
+    expect(view.query).toEqual(query);
+    expect(parseCoachView(JSON.parse(JSON.stringify(view)))).toEqual(view);
+    // The hero's source follows the focus; a card that names no leak has none.
+    expect(v4(toReportView(spikeReport({ focus: { kind: 'clock' } }))).hero.source).toBe('clock');
+    expect(v4(toReportView(spikeReport({ focus: { kind: 'leak', key: 'opening' } }))).hero.source).toBe('opening');
+    const zero = spikeReport({ leaks: spikeReport().leaks.map((l) => ({ ...l, sharePct: 0 })), focus: { kind: 'leak', key: 'middlegame' } });
+    expect('source' in v4(toReportView(zero)).hero).toBe(false);
+    // Optional when parsing (an older payload still shows), checked when present.
+    const old = { ...view, hero: { headline: view.hero.headline, sub: view.hero.sub }, leaks: view.leaks.map(({ key: _k, ...l }) => l), query: undefined };
+    expect(parseCoachView(JSON.parse(JSON.stringify(old)))).not.toBeNull();
+    for (const bad of [
+      { ...view, hero: { ...view.hero, source: 'everything' } },
+      { ...view, leaks: [{ ...view.leaks[0], key: 'rook' }, ...view.leaks.slice(1)] },
+      { ...view, quickFixes: [{ ...view.quickFixes![0], key: 7 }] },
+      { ...view, query: { accounts: [] } },
+      { ...view, query: { timeClass: 'blitz', accounts: [{ username: 'alice', maxGames: 0 }] } },
+      { ...view, query: { timeClass: 'blitz', usernames: 'alice' } },
+      { ...view, query: { timeClass: 'blitz', asOf: 'yesterday' } },
+    ]) {
+      expect(parseCoachView(bad), JSON.stringify(bad).slice(0, 80)).toBeNull();
+    }
+    // The refs carry no answers: the quick fix still hides its best move.
+    expect(view.quickFixes?.[0]).toMatchObject({ revealed: false, bestSan: null, bestUci: null });
   });
 
   it('parseReturnsSanitisedReportCopy', () => {
