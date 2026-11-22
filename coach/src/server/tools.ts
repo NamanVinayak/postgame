@@ -21,7 +21,15 @@ import type { TimeClass } from '../../../src/types';
 import { readCached, type CachedGame } from '../analysis/cache';
 import type { JobStatus, Query, Runner } from '../analysis/runner';
 import { deepDisagrees, deepPositionFacts, examplePositions, repeatedRefs, type PositionFacts } from '../coaching/explain';
-import { checkMove, firstTeachable, isTeachable, refKey, samePatternPositions, type CheckResult } from '../coaching/lesson';
+import {
+  checkMove,
+  firstTeachable,
+  isTeachable,
+  practiceExclusions,
+  refKey,
+  samePatternPositions,
+  type CheckResult,
+} from '../coaching/lesson';
 import {
   addThinkingNote,
   lastSessionSummary,
@@ -996,13 +1004,11 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
         if (!lesson) {
           return failure('No lesson yet: call coach_report (or coach_diagnosis) for this player first, then ask again.');
         }
+        const byId = new Map(lesson.games.map((c) => [c.game.id, c]));
         const exclude = new Set(lesson.asked);
         try {
           const s = loadStudent(lesson.player);
-          const cur = openIndex(lesson.player, s);
-          s.sessions.forEach((sess, i) => {
-            for (const t of sess.tried) if (t.correct || i === cur) exclude.add(refKey(t.gameId, t.ply));
-          });
+          for (const k of practiceExclusions(s, openIndex(lesson.player, s), byId)) exclude.add(k);
         } catch {
           // No readable student file: only this session's positions are left out.
         }
@@ -1014,7 +1020,6 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
               : 'No more practice positions for this focus in these games. Move on to the rule of thumb.',
           );
         }
-        const byId = new Map(lesson.games.map((c) => [c.game.id, c]));
         let r: Awaited<ReturnType<typeof firstTeachable>>;
         try {
           r = await firstTeachable(cands, (id) => byId.get(id) ?? readCached(id), (c, p) => deepPositionFacts(c, p, engine), ASK_MAX_CHECKS);
@@ -1107,9 +1112,10 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
       title: 'Note a thinking error',
       description:
         "Saves, in the player's student file, a thinking error you noticed behind their reason (one short plain sentence, " +
-        'e.g. "didn\'t ask what the last move threatened"), and/or the session\'s one rule of thumb for live games.',
+        'e.g. "didn\'t ask what the last move threatened"), and/or the session\'s one rule of thumb for live games. ' +
+        'Name no moves in either: the next session reads them out before the player retries the position.',
       inputSchema: {
-        note: z.string().trim().min(1).max(300).optional().describe('The thinking error, in one short sentence'),
+        note: z.string().trim().min(1).max(300).optional().describe('The thinking error, in one short sentence, naming no moves'),
         rule: z.string().trim().min(1).max(300).optional().describe("This session's rule of thumb for live games"),
         username: optionalUsername,
       },

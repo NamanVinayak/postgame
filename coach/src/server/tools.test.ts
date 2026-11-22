@@ -750,6 +750,30 @@ describe('coach_ask_position', () => {
     for (const bit of ['Nf6', 'g8f6', 'Ng5']) expect(textOf(cleared)).not.toContain(bit);
     await runner.close();
   });
+
+  it('brings back a position answered right in an earlier session (spacing), but not within the same session', async () => {
+    const engine = keyedEngine({
+      [FEN_BEFORE_5]: NF6_BEST,
+      [FEN_AFTER_5]: NF6_HOLDS,
+      [FEN_BEFORE_7]: QE7_BEFORE,
+      [FEN_AFTER_7]: D5_AFTER,
+    });
+    const one = italianLesson(engine);
+    const first = await connect(one.deps);
+    await call(first, 'coach_report', ALICE);
+    expect((await call(first, 'coach_ask_position', {})).structuredContent).toMatchObject({ ply: 7 });
+    const right = await call(first, 'coach_check_move', { gameId: GAME_ID, ply: 7, moveSan: 'Qe7' });
+    expect(right.structuredContent).toMatchObject({ correct: true });
+    expect((await call(first, 'coach_ask_position', {})).isError).toBe(true);
+
+    // The next server session: right once is not learned yet, so it is practised again.
+    const runner2 = createRunner(NO_ENGINE, source([one.c.game]));
+    const second = await connect({ ...one.deps, runner: runner2 });
+    await call(second, 'coach_report', ALICE);
+    expect((await call(second, 'coach_ask_position', {})).structuredContent).toMatchObject({ ply: 7 });
+    await one.runner.close();
+    await runner2.close();
+  });
 });
 
 describe('coach_check_move', () => {

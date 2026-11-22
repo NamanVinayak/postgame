@@ -10,15 +10,16 @@
 import { evalToWinPct } from '../../../src/analysis/winPct';
 import { uciLineToSan } from '../../../src/analysis/lines';
 import type { Color } from '../../../src/types';
-import { readCached, type CachedGame } from '../analysis/cache';
+import type { CachedGame } from '../analysis/cache';
 import { DISPLAY_CFG, REPEAT_CFG } from '../config';
-import { gamePlies } from '../diagnosis/areas';
 import type { Diagnosis } from '../diagnosis/diagnose';
-import { positionKey, type RepeatedPosition } from '../diagnosis/repeated';
+import type { RepeatedPosition } from '../diagnosis/repeated';
 import type { DisplayEngine } from '../engine/displayEngine';
 import { uciOf } from './explain';
-import { moveOutcome, parseAttempt } from './lesson';
+import { DRILLS_PER_POSITION, moveOutcome, parseAttempt, rightSessionsByBoard } from './lesson';
 import type { StudentFile } from './student';
+
+export { DRILLS_PER_POSITION } from './lesson';
 
 export interface ReportPosition {
   fen: string;
@@ -30,7 +31,7 @@ export interface ReportPosition {
   /** From the deep search, never the quick one. */
   bestSan: string;
   bestUci: string;
-  /** Average win-% lost on the wrong moves, rounded (approximate: from the quick check). */
+  /** Average win-% lost on the wrong moves shown, rounded (approximate: from the quick check). */
   lossPts: number;
   wrongTimes: number;
   seenTimes: number;
@@ -41,8 +42,6 @@ export interface ReportPosition {
 
 /** Positions on the report card. */
 export const REPORT_POSITIONS = 3;
-/** Right answers, on separate sessions, that count a position as drilled. */
-export const DRILLS_PER_POSITION = 3;
 /** Repeated positions deep-checked at most (each takes a few seconds). */
 const MAX_POSITIONS_CHECKED = 6;
 /** Usual moves deep-checked per position. */
@@ -137,34 +136,6 @@ function openingOf(r: RepeatedPosition, byId: Map<string, CachedGame>): string |
   return commonOpening(names);
 }
 
-// ---- drills from the student file ----
-
-/** For each position key, the sessions in which the player got it right. */
-function drilledSessions(student: StudentFile | undefined, byId: Map<string, CachedGame>): Map<string, Set<number>> {
-  const out = new Map<string, Set<number>>();
-  if (!student) return out;
-  const keyCache = new Map<string, string | null>();
-  const keyOf = (gameId: string, ply: number): string | null => {
-    const k = `${gameId}#${ply}`;
-    if (!keyCache.has(k)) {
-      const c = byId.get(gameId) ?? readCached(gameId);
-      const fen = c ? gamePlies(c)?.[ply]?.fenBefore : undefined;
-      keyCache.set(k, fen ? positionKey(fen) : null);
-    }
-    return keyCache.get(k)!;
-  };
-  student.sessions.forEach((s, i) => {
-    for (const t of s.tried) {
-      if (!t.correct) continue;
-      const key = keyOf(t.gameId, t.ply);
-      if (!key) continue;
-      if (!out.has(key)) out.set(key, new Set());
-      out.get(key)!.add(i);
-    }
-  });
-  return out;
-}
-
 // ---- the positions ----
 
 /**
@@ -172,7 +143,8 @@ function drilledSessions(student: StudentFile | undefined, byId: Map<string, Cac
  * Each is searched at display depth: the best move comes from that search, and each usual
  * wrong move (at most MAX_MOVES_CHECKED) is kept only if the search after it loses more than
  * REPEAT_CFG.wrongLossPts against the best. A position with no such move is left out.
- * `drillsDone` counts the sessions in the student file with a right answer there (default 0).
+ * `wrongTimes` and `lossPts` count only the wrong moves shown. `drillsDone` counts the sessions
+ * in the student file with a right answer at that board (default 0).
  */
 export async function buildReportPositions(
   d: Diagnosis,
@@ -186,7 +158,7 @@ export async function buildReportPositions(
     ...d.repeated.filter((r) => !focusKeys.includes(r.key)),
   ];
   const byId = new Map(games.map((c) => [c.game.id, c]));
-  const drilled = drilledSessions(student, byId);
+  const drilled = rightSessionsByBoard(student, byId);
 
   const out: ReportPosition[] = [];
   for (const r of ordered.slice(0, MAX_POSITIONS_CHECKED)) {
@@ -197,7 +169,7 @@ export async function buildReportPositions(
     if (!bestUci || !bestSan) continue;
     const bestWin = evalToWinPct(before.cp, before.mate);
 
-    const wrong: { san: string; uci: string }[] = [];
+    const wrong: { san: string; uci: string; times: number; lossPts: number }[] = [];
     let checked = 0;
     for (const u of r.usual) {
       if (checked >= MAX_MOVES_CHECKED) break;
@@ -205,9 +177,12 @@ export async function buildReportPositions(
       if (!m || uciOf(m) === bestUci) continue; // the deep best is never "wrong"
       checked++;
       const { win } = await moveOutcome(m, displayEngine);
-      if (bestWin - win > REPEAT_CFG.wrongLossPts) wrong.push({ san: m.san, uci: uciOf(m) });
+      if (bestWin - win > REPEAT_CFG.wrongLossPts) wrong.push({ san: m.san, uci: uciOf(m), times: u.times, lossPts: u.lossPts });
     }
     if (wrong.length === 0) continue;
+    // The counts describe the wrong moves shown, so a move the deep check cleared isn't counted.
+    const wrongTimes = wrong.reduce((n, w) => n + w.times, 0);
+    const avgLoss = wrong.reduce((n, w) => n + w.times * w.lossPts, 0) / wrongTimes;
 
     out.push({
       fen: r.fen,
@@ -216,8 +191,8 @@ export async function buildReportPositions(
       wrongUci: wrong[0].uci,
       bestSan,
       bestUci,
-      lossPts: Math.round(r.avgLossPts),
-      wrongTimes: r.wrong,
+      lossPts: Math.round(avgLoss),
+      wrongTimes,
       seenTimes: r.seen,
       opening: openingOf(r, byId),
       drillsDone: Math.min(DRILLS_PER_POSITION, drilled.get(r.key)?.size ?? 0),
