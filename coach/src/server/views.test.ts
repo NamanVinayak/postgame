@@ -6,7 +6,9 @@ import {
   toQuestionView,
   toReportView,
   toStatusView,
+  costlyMovesText,
   heroFromConversion,
+  heroFromTimeLosses,
   legacyReportToV4,
   quickFixFromPosition,
   type DiagnosisLike,
@@ -511,12 +513,12 @@ describe('report card v4', () => {
       sub: '1 in 3 of your losses were games you were winning.',
     });
     expect(view.leaks.map((l) => [l.label, l.sharePct, l.range, l.detail])).toEqual([
-      ['Balanced middlegames', 35, [32, 38], 'about 1.8 big mistakes a game'],
-      ["When you're already winning", 24, [21, 27], 'about 1 a game'],
-      ['Your first 10 moves', 21, [18, 24], 'about 0.8 a game'],
+      ['Balanced middlegames', 35, [32, 38], 'About 2 costly moves per game'],
+      ["When you're already winning", 24, [21, 27], 'About 1 costly move per game'],
+      ['Your first 10 moves', 21, [18, 24], 'About 1 costly move per game'],
       ['Low on the clock', 10, [7, 13], '72 of your 448 losses were on time'],
-      ["When you're already losing", 7, [4, 10], 'about 0.3 a game'],
-      ['Endgames', 4, [1, 7], 'about 0.2 a game'],
+      ["When you're already losing", 7, [4, 10], 'About 1 costly move every 2 games'],
+      ['Endgames', 4, [1, 7], 'About 1 costly move every 5 games'],
     ]);
     expect(view.context).toBe('Your opponents keep the same share of their winning games as you (69%): normal at your level, and the biggest thing you control.');
     expect(view.focus).toMatchObject({
@@ -542,8 +544,7 @@ describe('report card v4', () => {
     expect(clock.focus.title).toBe('Beat the clock');
     expect(clock.focus.estimate).toBeUndefined();
     const mid = v4(toReportView(spikeReport({ focus: { kind: 'leak', key: 'middlegame' } })));
-    expect(mid.hero.headline).toBe('Most of your points go in one place: balanced middlegames.');
-    expect(mid.hero.sub).toBe('35% of all the win chance you give away, about 1.8 big mistakes a game.');
+    expect(mid.hero).toEqual({ headline: 'Your biggest leak: balanced middlegames.', sub: '35% of the win chance you give away happens here.' });
     expect(mid.focus.estimate).toBeUndefined();
     for (const v of [clock, mid]) expect(parseCoachView(JSON.parse(JSON.stringify(v)))).toEqual(v);
     // Plain words only.
@@ -604,6 +605,9 @@ describe('report card v4', () => {
     });
     const at = (lostShareOfLossesPct: number) => heroFromConversion({ winningGames: 40, lost: 10, lostShareOfLossesPct }).sub;
     expect(at(50)).toBe('1 in 2 of your losses were games you were winning.');
+    expect(at(70)).toBe('1 in 2 of your losses were games you were winning.'); // N never below 2
+    expect(at(85)).toBe('1 in 2 of your losses were games you were winning.');
+    expect(at(86)).toBe('Almost all of your losses were games you were winning.'); // only above 85%
     expect(at(20)).toBe('1 in 5 of your losses were games you were winning.');
     expect(at(23)).toBe('1 in 4 of your losses were games you were winning.'); // 100 / 23 = 4.3
     expect(at(0)).toBe('None of your losses were games you were winning.');
@@ -632,5 +636,83 @@ describe('report card v4', () => {
     expect(parseCoachView({ ...view, hero: { headline: '', sub: '' } })).toBeNull();
     expect(parseCoachView({ ...view, focus: { ...view.focus, drillsDone: 21 } })).toBeNull();
     expect(parseCoachView({ ...view, cta: '' })).toBeNull();
+  });
+});
+
+describe('report card v4, review fixes', () => {
+  it('heroNamesFocusLeakWithoutMajorityClaim', () => {
+    // The top bar is 35%: a leak, not a majority, so no "one place" or "most".
+    const top = v4(toReportView(spikeReport({ focus: { kind: 'leak', key: 'middlegame' } })));
+    expect(top.hero).toEqual({ headline: 'Your biggest leak: balanced middlegames.', sub: '35% of the win chance you give away happens here.' });
+    // The focus is the second-ranked bar: it is this week's focus, not the biggest leak.
+    const second = v4(toReportView(spikeReport({ focus: { kind: 'leak', key: 'winning' } })));
+    expect(second.hero).toEqual({ headline: "Your focus this week: when you're already winning.", sub: '24% of the win chance you give away happens here.' });
+    for (const h of [top.hero, second.hero]) expect(`${h.headline} ${h.sub}`).not.toMatch(/one place|most|majority|biggest leak: when/i);
+  });
+
+  it('clockHeroAgreesInNumber', () => {
+    expect(heroFromTimeLosses({ losses: 1, onTime: 1, sharePct: 100 }).headline).toBe('1 of your 1 loss was on time.');
+    expect(heroFromTimeLosses({ losses: 448, onTime: 1, sharePct: 0.22 }).headline).toBe('1 of your 448 losses was on time.');
+    expect(heroFromTimeLosses({ losses: 448, onTime: 72, sharePct: 16.07 })).toEqual({
+      headline: '72 of your 448 losses were on time.',
+      sub: '1 in 6 of your losses came from the clock, not the board.',
+    });
+    expect(heroFromTimeLosses({ losses: 10, onTime: 9, sharePct: 90 }).sub).toBe('Almost all of your losses were on time.');
+    expect(heroFromTimeLosses({ losses: 10, onTime: 8, sharePct: 80 }).sub).toBe('1 in 2 of your losses came from the clock, not the board.');
+    // The clock bar's line agrees too.
+    const one = v4(toReportView(spikeReport({ timeLosses: { losses: 448, onTime: 1, sharePct: 0.22 } })));
+    expect(one.leaks.find((l) => l.label === 'Low on the clock')?.detail).toBe('1 of your 448 losses was on time');
+  });
+
+  it('costlyMoveWording', () => {
+    expect(costlyMovesText(1.83)).toBe('About 2 costly moves per game'); // >= 1.5: N rounded
+    expect(costlyMovesText(1.5)).toBe('About 2 costly moves per game');
+    expect(costlyMovesText(3.4)).toBe('About 3 costly moves per game');
+    expect(costlyMovesText(1.49)).toBe('About 1 costly move per game'); // 0.75 to 1.5
+    expect(costlyMovesText(0.75)).toBe('About 1 costly move per game');
+    expect(costlyMovesText(0.74)).toBe('About 1 costly move every 2 games'); // 0.3 to 0.75
+    expect(costlyMovesText(0.3)).toBe('About 1 costly move every 2 games');
+    expect(costlyMovesText(0.29)).toBe('About 1 costly move every 3 games'); // < 0.3: N = round(1 / x)
+    expect(costlyMovesText(0.2)).toBe('About 1 costly move every 5 games');
+    expect(costlyMovesText(0.04)).toBe('About 1 costly move every 25 games');
+    expect(costlyMovesText(0)).toBe('No costly moves here');
+  });
+
+  it('rangesFlagPassesThroughAndIsChecked', () => {
+    const shaky = v4(toReportView({ ...spikeReport(), rangesReliable: false }));
+    expect(shaky.rangesReliable).toBe(false);
+    expect(parseCoachView(JSON.parse(JSON.stringify(shaky)))).toEqual(shaky);
+    expect('rangesReliable' in v4(toReportView(spikeReport()))).toBe(false); // not given: no key
+    expect(parseCoachView({ ...shaky, rangesReliable: 'no' })).toBeNull();
+  });
+
+  it('legacyConversionTruncatesLongText', () => {
+    const long = 'Your rating is honest and here is a very long headline. '.repeat(8); // > 200 characters
+    const legacy = toReportView(diagnosis([area({ area: 'endgame', label: 'notYourProblem' })], { kind: 'repeated', keys: ['a'] }), long, {
+      subhead: 's'.repeat(260),
+      positions: [position({ opening: `Sicilian Defense: ${'Very Long Sub-Variation '.repeat(8)}` })],
+    });
+    const card = parseCoachView(JSON.parse(JSON.stringify(legacy)));
+    expect(card).not.toBeNull(); // cut to fit, not refused
+    if (!card || card.kind !== 'report') throw new Error('no card');
+    expect(card.hero.headline.length).toBeLessThanOrEqual(200);
+    expect(card.hero.headline.endsWith('…')).toBe(true);
+    expect(card.hero.sub.length).toBeLessThanOrEqual(200);
+    expect(card.quickFixes?.[0].label.length).toBeLessThanOrEqual(80);
+  });
+
+  it('parseReturnsSanitisedReportCopy', () => {
+    const clean = v4(toReportView(spikeReport(), { positions: [board()], quickFixes: [quick(false)], cta: 'Go' }));
+    const dirty = {
+      ...clean,
+      extra: 'top',
+      hero: { ...clean.hero, tooltip: 'x' },
+      leaks: clean.leaks.map((l, i) => (i === 0 ? { ...l, note: 'y' } : l)),
+      focus: { ...clean.focus, secret: 'z' },
+    };
+    const parsed = parseCoachView(JSON.parse(JSON.stringify(dirty)));
+    expect(parsed).toEqual(clean); // unknown keys never survive, at any level
+    expect(JSON.stringify(parsed)).not.toMatch(/tooltip|note|secret|extra/);
+    expect(parsed).not.toBe(dirty); // a copy
   });
 });
