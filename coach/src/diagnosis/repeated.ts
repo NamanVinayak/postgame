@@ -16,8 +16,12 @@ export interface RepeatedPosition {
   wrong: number;
   /** Average win-% points lost over the wrong moves. */
   avgLossPts: number;
-  /** Every move the player chose here, most frequent first, with its average loss. */
-  usual: { move: string; times: number; avgLossPts: number }[];
+  /**
+   * The wrong moves the player chose here (each lost ≥ REPEAT_CFG.wrongLossPts), most frequent
+   * first, with how often and the average win-% points lost. Never the engine's move or any
+   * move that lost less.
+   */
+  usual: { move: string; times: number; lossPts: number }[];
   /** The engine's preferred move, as recorded when the player went wrong (most common if it varies). */
   best: string;
   gameIds: string[];
@@ -77,19 +81,20 @@ export function findRepeated(games: CachedGame[]): RepeatedPosition[] {
     const avgLossPts = wrong.reduce((sum, s) => sum + s.fact.lossPts, 0) / wrong.length;
     if (avgLossPts < REPEAT_CFG.minAvgLossPts) continue;
 
+    const best =
+      mostCommon(wrong.map((s) => s.fact.bestSan).filter((b): b is string => b !== null)) ??
+      mostCommon(sightings.map((s) => s.fact.bestSan ?? s.fact.san))!;
     const moves = new Map<string, { times: number; loss: number }>();
-    for (const s of sightings) {
+    for (const s of wrong) {
+      if (s.fact.san === best) continue;
       const m = moves.get(s.fact.san) ?? { times: 0, loss: 0 };
       m.times++;
       m.loss += s.fact.lossPts;
       moves.set(s.fact.san, m);
     }
     const usual = [...moves]
-      .map(([move, m]) => ({ move, times: m.times, avgLossPts: m.loss / m.times }))
-      .sort((a, b) => b.times - a.times || b.avgLossPts - a.avgLossPts || a.move.localeCompare(b.move));
-    const best =
-      mostCommon(wrong.map((s) => s.fact.bestSan).filter((b): b is string => b !== null)) ??
-      mostCommon(sightings.map((s) => s.fact.bestSan ?? s.fact.san))!;
+      .map(([move, m]) => ({ move, times: m.times, lossPts: m.loss / m.times }))
+      .sort((a, b) => b.times - a.times || b.lossPts - a.lossPts || a.move.localeCompare(b.move));
     const example = sightings[0];
     found.push({
       key,

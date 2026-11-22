@@ -97,7 +97,7 @@ async function main(): Promise<void> {
   out.push('');
   out.push(`Top ${Math.min(10, d.repeated.length)} repeated positions:`);
   d.repeated.slice(0, 10).forEach((r, i) => {
-    const usual = r.usual.slice(0, 2).map((u) => `${u.move} x${u.times} (-${num(u.avgLossPts)})`).join(', ');
+    const usual = r.usual.slice(0, 2).map((u) => `${u.move} x${u.times} (-${num(u.lossPts)})`).join(', ');
     out.push(
       `${i + 1}. seen ${r.seen}, wrong ${r.wrong}, avg loss ${num(r.avgLossPts)} pts, usual: ${usual}, ` +
         `best: ${r.best}, ${r.movesFromStart.length} moves from start`,
