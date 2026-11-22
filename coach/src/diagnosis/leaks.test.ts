@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Outcome } from '../../../src/types';
 import type { CachedGame } from '../analysis/cache';
+import { LEAK_CFG, STATS_CFG } from '../config';
 import {
   LEAK_KEYS,
   chooseLeakFocus,
@@ -88,11 +89,86 @@ describe('leakReport', () => {
     expect(r.conversion.lostShareOfLossesPct).toBeCloseTo(25, 10); // 1 of 4 losses
     expect(r.conversion.oppConvertedPct).toBeCloseTo(100, 10);
     expect(r.avgScore).toBeCloseTo(1.5 / 6, 10);
-    // what-if: half the 1 lost-from-winning game turned into a win → +0.5 points over 6 games
-    expect(r.whatIf?.extraScorePerGame).toBeCloseTo(0.5 / 6, 10);
-    const raw = eloForScoreGain(0.5 / 6, 1.5 / 6);
-    expect(r.whatIf?.ratingPoints).toBe(Math.round(raw / 5) * 5);
-    expect(r.whatIf!.ratingPoints % 5).toBe(0);
+    const [lo, hi] = r.conversion.lostShareRange;
+    expect(lo).toBeGreaterThanOrEqual(0);
+    expect(lo).toBeLessThanOrEqual(25);
+    expect(hi).toBeGreaterThanOrEqual(25);
+    expect(hi).toBeLessThanOrEqual(100);
+    expect(r.whatIf).toBeNull(); // 6 games: below the floors for an estimate
+    expect(r.notes).toContain('Not enough games for an estimate yet.');
+    // every loss came from a winning position: the range can only be 100%
+    const allFromWinning = leakReport([games[2], games[2]].map((c, i) => ({ ...c, game: { ...c.game, id: `x${i}` } })), ['alice']);
+    expect(allFromWinning.conversion.lostShareRange).toEqual([100, 100]);
+  });
+
+  it('whatIfNeedsEnoughGamesAndIsCappedAndLabelledRough', () => {
+    const winning = winsFrom({ 1: 80 });
+    const set = (spec: [Outcome, boolean, number][]) =>
+      spec.flatMap(([outcome, isWinning, count], s) =>
+        Array.from({ length: count }, (_, i) =>
+          game({ id: `${s}-${i}`, sans: SANS, wins: isWinning ? winning : undefined, outcome }),
+        ),
+      );
+    // 60 games: 30 clearly winning (24 won, 6 lost) and 30 level (15 won, 15 lost)
+    const normal = leakReport(set([['win', true, 24], ['loss', true, 6], ['win', false, 15], ['loss', false, 15]]), ['alice']);
+    expect(normal.whatIf?.label).toMatch(/rough/i);
+    expect(normal.whatIf?.label).toBe('Rough estimate: if you lost half as many of the games you were winning');
+    expect(normal.whatIf?.extraScorePerGame).toBeCloseTo(3 / 60, 10);
+    expect(normal.whatIf?.ratingPoints).toBe(Math.round(eloForScoreGain(3 / 60, 39 / 60) / 5) * 5);
+    expect(normal.whatIf!.ratingPoints % 5).toBe(0);
+    // 40 games: 30 clearly winning (10 won, 20 lost) and 10 level losses → +0.25 a game, capped at 0.1 in the slope
+    const big = leakReport(set([['win', true, 10], ['loss', true, 20], ['loss', false, 10]]), ['alice']);
+    expect(big.whatIf?.extraScorePerGame).toBeCloseTo(0.25, 10);
+    expect(big.whatIf?.ratingPoints).toBe(Math.round(eloForScoreGain(0.1, 0.25) / 5) * 5);
+    // too few games, or too few winning games: no estimate
+    for (const tiny of [set([['loss', true, 1]]), set([['loss', true, 2], ['win', true, 1], ['loss', false, 1]])]) {
+      const r = leakReport(tiny, ['alice']);
+      expect(r.conversion.lost).toBeGreaterThan(0);
+      expect(r.whatIf).toBeNull();
+      expect(r.notes).toContain('Not enough games for an estimate yet.');
+    }
+    const fewWinning = leakReport(set([['loss', true, LEAK_CFG.focusMinWinningGames - 1], ['win', false, 20]]), ['alice']);
+    expect(fewWinning.games).toBeGreaterThanOrEqual(STATS_CFG.minGames);
+    expect(fewWinning.whatIf).toBeNull();
+  });
+
+  it('rangesReliableOnlyFromTheGameFloor', () => {
+    const many = (n: number) => Array.from({ length: n }, (_, i) => game({ id: `g${i}`, sans: SANS, wins: winsFrom({ 20: 40 }) }));
+    expect(leakReport(many(4), ['alice']).rangesReliable).toBe(false);
+    expect(leakReport(many(STATS_CFG.minGames - 1), ['alice']).rangesReliable).toBe(false);
+    expect(leakReport(many(STATS_CFG.minGames), ['alice']).rangesReliable).toBe(true);
+    expect(leakReport([], ['alice']).rangesReliable).toBe(false);
+  });
+
+  it('readsTheMoversOwnPreviousClock', () => {
+    // alice (White) gives away 10 points with her move at ply 22. Only clocks[20] (her clock after
+    // her previous move) is low; the opponent's clock (ply 21) and her clock after the move are not.
+    const clocks = SANS.map((_, i) => (i === 20 ? 10 : 170));
+    const r = leakReport([game({ id: 'clk', sans: SANS, wins: winsFrom({ 22: 40 }), clocks })], ['alice']);
+    const clock = r.leaks.find((l) => l.key === 'clock')!;
+    expect(clock.givenAwayPer10).toBeCloseTo(1.0, 10);
+    expect(clock.moves).toBe(1);
+    expect(clock.sharePct).toBeCloseTo(100, 10);
+  });
+
+  it('sharesAreRatioOfSumsNotMeanOfShares', () => {
+    // game 1 gives away 0.5 in the middlegame, game 2 gives away 0.1 in the first moves
+    const a = game({ id: 'big', sans: SANS, wins: winsFrom({ 20: 0 }) });
+    const b = game({ id: 'small', sans: SANS, wins: winsFrom({ 2: 40 }) });
+    const r = leakReport([a, b], ['alice']);
+    expect(r.leaks.find((l) => l.key === 'middlegame')!.sharePct).toBeCloseTo((100 * 0.5) / 0.6, 10); // not 50
+    expect(r.leaks.find((l) => l.key === 'opening')!.sharePct).toBeCloseTo((100 * 0.1) / 0.6, 10);
+  });
+
+  it('convertsAndFindsCandidatesForBlack', () => {
+    // alice plays Black. White's win % 20 → Black at 80 before her first two moves: clearly winning.
+    // Her 2nd move (ply 3) drops her from 80 to 65: a keep-the-win position.
+    const c = game({ id: 'black', sans: SANS, myColor: 'black', wins: winsFrom({ 0: 20, 3: 35 }), outcome: 'loss', endTime: 9 });
+    const r = leakReport([c], ['alice']);
+    expect(r.conversion).toMatchObject({ winningGames: 1, lost: 1, oppWinningGames: 0 });
+    expect(keepTheWinCandidates([c], ['alice'])).toEqual([
+      { gameId: 'black', ply: 3, outcome: 'loss', endTime: 9, quickLossPts: 15 },
+    ]);
   });
 
   it('timeLossesFromTermination', () => {
@@ -188,6 +264,20 @@ describe('chooseLeakFocus', () => {
     expect(chooseLeakFocus(conv(30, 19.9), time(30, 15), leaks)).toEqual({ kind: 'clock' });
     expect(chooseLeakFocus(conv(30, 19.9), time(29, 50), leaks)).toEqual({ kind: 'leak', key: 'opening' }); // never "already losing"
     expect(chooseLeakFocus(conv(0, 0), time(30, 14.9), leaks)).toEqual({ kind: 'leak', key: 'opening' });
+  });
+
+  it('focusNeverLeaksClockOrSneaksInWinning', () => {
+    const clockTop = [leak('clock', 50), leak('middlegame', 30), leak('losing', 20)];
+    expect(chooseLeakFocus(conv(0, 0), time(10, 0), clockTop)).toEqual({ kind: 'clock' }); // never { leak, clock }
+    const winningTop = [leak('winning', 40), leak('opening', 30), leak('losing', 30)];
+    // keep-the-win failed only for lack of winning games: skip "already winning", take the next
+    expect(chooseLeakFocus(conv(29, 50), time(10, 0), winningTop)).toEqual({ kind: 'leak', key: 'opening' });
+    // enough winning games but few lost: "already winning" may still be the focus
+    expect(chooseLeakFocus(conv(30, 10), time(10, 0), winningTop)).toEqual({ kind: 'leak', key: 'winning' });
+    // nothing given away at all (empty input): the documented placeholder
+    const zeros = LEAK_KEYS.map((k) => leak(k, 0));
+    expect(chooseLeakFocus(conv(0, 0), time(0, 0), zeros)).toEqual({ kind: 'leak', key: 'middlegame' });
+    expect(leakReport([], ['alice']).focus).toEqual({ kind: 'leak', key: 'middlegame' });
   });
 });
 
