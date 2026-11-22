@@ -2,7 +2,8 @@ import type { App, McpUiHostContext } from '@modelcontextprotocol/ext-apps';
 import { useState, type CSSProperties } from 'react';
 import { Chessboard, defaultArrowOptions } from 'react-chessboard';
 import { DEFAULT_REPORT_CTA, type ReportPosition, type ReportRow, type ReportView } from '../../src/server/views';
-import { Chip, Radar, pct } from './Radar';
+import { Chip, Radar, RadarLegend } from './Radar';
+import { pct } from './radarScale';
 import { arrowFor, type Arrow } from './shared';
 import './report.css';
 
@@ -234,24 +235,7 @@ export function ReportCard({
             <AreaList rows={view.rows} />
           )}
           <div className="rc-legend">
-            {chart && (
-              <>
-                <div className="rc-keys" aria-hidden="true">
-                  <span>
-                    <i className="rc-kYou" /> You
-                  </span>
-                  <span>
-                    <i className="rc-kPeer" /> Players at your rating
-                  </span>
-                  <span>
-                    <i className="rc-kRange" /> Where you likely are
-                  </span>
-                </div>
-                <div className="rc-legendStrong">
-                  Dashed hexagon = players at your rating. Outside it = fewer serious mistakes than them; inside = more.
-                </div>
-              </>
-            )}
+            {chart && <RadarLegend rows={view.rows} />}
             <div className="rc-legendNote">
               Numbers: how often a move was a serious mistake, yours vs theirs.
               {chart && <> The chart's edge means half their rate.</>}

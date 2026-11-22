@@ -1,5 +1,5 @@
 /**
- * The three things the board widget can show, and pure mappers that build them from the
+ * The four things the board widget can show, and pure mappers that build them from the
  * coach's data. Every tool linked to BOARD_URI returns one CoachView as `structuredContent`;
  * the widget switches on `kind`.
  *
@@ -66,10 +66,25 @@ export interface ReportView {
   cta?: string;
 }
 
+/** How far a long job has got, e.g. 312 of 900 games analysed. */
+export interface StatusProgress {
+  done: number;
+  total: number;
+}
+
+/** A calm waiting card while the coach works (fetching or analysing games). */
+export interface StatusView {
+  kind: 'status';
+  title: string;
+  message: string;
+  progress?: StatusProgress;
+}
+
 export type CoachView =
   | ({ kind: 'answer' } & BoardView)
   | { kind: 'question'; fen: string; orientation: Color; gameId: string; ply: number; prompt: string }
-  | ReportView;
+  | ReportView
+  | StatusView;
 
 /** What `toReportView` adds to the diagnosis: the words under the headline, the missions, the button. */
 export interface ReportExtras {
@@ -107,6 +122,8 @@ export const MAX_WRONG_MOVES = 4;
 /** The longest training-button label the widget accepts. */
 export const MAX_CTA_LENGTH = 60;
 export const DEFAULT_REPORT_CTA = "Start this week's training";
+/** The longest title or message a status card accepts. */
+export const MAX_STATUS_TEXT = 300;
 
 const round1 = (x: number) => Math.round(x * 10) / 10;
 
@@ -263,6 +280,21 @@ export function toReportView(d: DiagnosisLike, headline: string, extras: ReportE
   return view;
 }
 
+/** Cuts text to MAX_STATUS_TEXT characters, ending with "…" when it had to cut. */
+const fitStatus = (text: string) => (text.length <= MAX_STATUS_TEXT ? text : `${text.slice(0, MAX_STATUS_TEXT - 1)}…`);
+
+/**
+ * The waiting card: a title, one message and, for a job that can count its steps, how far it
+ * has got. Like the report, it never emits what the widget would refuse: progress that doesn't
+ * add up (done above total, negative, fractional, not a number) is left out, so the card shows
+ * a plain waiting state, and over-long text is cut to fit.
+ */
+export function toStatusView(title: string, message: string, progress?: StatusProgress): CoachView {
+  const view: StatusView = { kind: 'status', title: fitStatus(title), message: fitStatus(message) };
+  if (progress !== undefined && isProgress(progress)) view.progress = { done: progress.done, total: progress.total };
+  return view;
+}
+
 // ---- Checking what a tool sent (used by the widget) ----
 
 type Obj = Record<string, unknown>;
@@ -356,6 +388,16 @@ function isPosition(p: unknown): p is ReportPosition {
   );
 }
 
+function isProgress(p: unknown): p is StatusProgress {
+  return isObj(p) && isCount(p.done) && isCount(p.total) && p.done <= p.total;
+}
+
+const isStatusText = (x: unknown): x is string => isStr(x) && x.length <= MAX_STATUS_TEXT;
+
+function isStatus(v: Obj): boolean {
+  return isStatusText(v.title) && isStatusText(v.message) && (v.progress === undefined || isProgress(v.progress));
+}
+
 function isReport(v: Obj): boolean {
   return (
     isStr(v.headline) &&
@@ -378,6 +420,7 @@ export function parseCoachView(x: unknown): CoachView | null {
   const ok =
     (x.kind === 'answer' && isAnswer(x)) ||
     (x.kind === 'question' && isQuestion(x)) ||
-    (x.kind === 'report' && isReport(x));
+    (x.kind === 'report' && isReport(x)) ||
+    (x.kind === 'status' && isStatus(x));
   return ok ? (x as unknown as CoachView) : null;
 }
