@@ -24,6 +24,8 @@
  * Equal rates land exactly on the hexagon, so when every area is within about half a point
  * of the players at your rating, the shape sits on the hexagon. That is the honest picture.
  */
+import type { ReportLabel, ReportRow } from '../../src/server/views';
+
 export const PEER_RADIUS = 0.6;
 /** How many doublings of the mistake rate separate the hexagon from the rim (and from the inner limit). */
 export const SPAN_DOUBLINGS = 1;
@@ -40,4 +42,59 @@ export function relativeRadius(you: number, them: number): number {
   else if (t === 0) doublings = -SPAN_DOUBLINGS;
   else doublings = Math.max(-SPAN_DOUBLINGS, Math.min(SPAN_DOUBLINGS, Math.log2(t / y)));
   return PEER_RADIUS + (1 - PEER_RADIUS) * (doublings / SPAN_DOUBLINGS);
+}
+
+/** The quietest a likely-range band is drawn. */
+export const MIN_BAND_OPACITY = 0.35;
+
+/**
+ * How strongly to draw a spoke's likely-range band, from where its outer end sits (a fraction
+ * of the chart's radius). Up to the hexagon it is drawn at full strength. Beyond it, it fades
+ * the further it pokes out, reaching MIN_BAND_OPACITY halfway to the rim. A wide band then
+ * never reads louder than your point.
+ */
+export function bandOpacity(outer: number): number {
+  const beyond = Math.max(0, outer - PEER_RADIUS) / (1 - PEER_RADIUS); // 0 at the hexagon, 1 at the rim
+  const k = beyond / 0.5;
+  if (k >= 1) return MIN_BAND_OPACITY;
+  return 1 - (1 - MIN_BAND_OPACITY) * k;
+}
+
+/** How each verdict reads on a chip. "Too close to call" and "Not enough games" stay neutral. */
+export const VERDICTS: Record<ReportLabel, { icon: string; text: string; tone: 'good' | 'bad' | 'neutral' | 'faint' }> = {
+  gap: { icon: '✗', text: 'Weak spot', tone: 'bad' },
+  notYourProblem: { icon: '✓', text: 'Not a weak spot', tone: 'good' },
+  noClearDifference: { icon: '–', text: 'Too close to call', tone: 'neutral' },
+  notEnoughData: { icon: '?', text: 'Not enough games', tone: 'faint' },
+};
+
+export const pct = (x: number) => `${x.toFixed(1)}%`;
+
+/**
+ * The chart in plain words, for screen readers: which areas sit outside the hexagon (fewer
+ * serious mistakes than players at your rating), which inside (more), which level, which have
+ * too few games, then each area's numbers and verdict. Empty groups are left out.
+ */
+export function radarSummary(rows: Pick<ReportRow, 'area' | 'label' | 'you' | 'them'>[]): string {
+  const outside: string[] = [];
+  const inside: string[] = [];
+  const level: string[] = [];
+  const unknown: string[] = [];
+  for (const r of rows) {
+    if (r.you === null || r.them === null) unknown.push(r.area);
+    else if (r.you < r.them) outside.push(r.area);
+    else if (r.you > r.them) inside.push(r.area);
+    else level.push(r.area);
+  }
+  const parts = ['Your shape against players at your rating, the dashed hexagon.'];
+  if (outside.length) parts.push(`Outside it, fewer serious mistakes than them: ${outside.join(', ')}.`);
+  if (inside.length) parts.push(`Inside it, more: ${inside.join(', ')}.`);
+  if (level.length) parts.push(`Level with them: ${level.join(', ')}.`);
+  if (unknown.length) parts.push(`Not enough games: ${unknown.join(', ')}.`);
+  const each = rows.map((r) => {
+    const verdict = VERDICTS[r.label].text.toLowerCase();
+    return r.you !== null && r.them !== null ? `${r.area}: you ${pct(r.you)}, them ${pct(r.them)}, ${verdict}` : `${r.area}: ${verdict}`;
+  });
+  parts.push(`The chips give the verdict. ${each.join('; ')}.`);
+  return parts.join(' ');
 }
