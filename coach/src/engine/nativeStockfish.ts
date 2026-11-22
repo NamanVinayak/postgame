@@ -6,7 +6,15 @@ import { ENGINE_CFG, loadLocalConfig } from '../config';
 
 type Proc = ChildProcessByStdio<Writable, Readable, null>;
 
-export type NativeStockfishOptions = Partial<typeof ENGINE_CFG> & { path?: string };
+export type NativeStockfishOptions = Partial<typeof ENGINE_CFG> & {
+  path?: string;
+  /**
+   * Search to this fixed depth instead of for `movetimeMs`, starting each search from a fresh
+   * game (`ucinewgame`, which clears the hash and history). With one thread this makes every
+   * search of a position give the same answer (used by the display engine).
+   */
+  depth?: number;
+};
 
 export interface NativeStockfish extends Engine {
   /**
@@ -30,6 +38,7 @@ export interface NativeStockfish extends Engine {
  * NOTE: the `movetimeMs` argument of `evaluate` is IGNORED. The search time is
  * fixed per adapter by `opts.movetimeMs` (default `ENGINE_CFG.movetimeMs`) so
  * that every caller of `analyzeGame` gets the same, configured search budget.
+ * With `opts.depth`, each search is `ucinewgame` + `go depth N` instead (no time limit).
  *
  * The binary path comes from `opts.path`, else `loadLocalConfig().stockfishPath`.
  * The process is started lazily on the first `evaluate`; a missing binary makes
@@ -181,13 +190,18 @@ export function createNativeStockfish(opts: NativeStockfishOptions = {}): Native
       listeners.add(onLine);
       failures.add(onFail);
       send(`position fen ${fen}`);
-      send(`go movetime ${cfg.movetimeMs}`);
+      send(cfg.depth !== undefined ? `go depth ${cfg.depth}` : `go movetime ${cfg.movetimeMs}`);
     });
   }
 
   async function evaluate(fen: string, _movetimeMs: number): Promise<Evaluation> {
     const run = chain.then(async () => {
       await ensureStarted();
+      if (cfg.depth !== undefined) {
+        // A fresh game before each fixed-depth search: nothing from earlier searches can change the answer.
+        send('ucinewgame');
+        await waitFor((l) => l === 'readyok', 'isready');
+      }
       return search(fen);
     });
     chain = run.catch(() => undefined);
