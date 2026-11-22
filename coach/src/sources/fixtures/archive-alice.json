@@ -1,0 +1,175 @@
+{
+  "games": [
+    {
+      "url": "https://www.chess.com/game/live/9001",
+      "pgn": "[Event \"Live Chess\"]\n[Site \"Chess.com\"]\n[White \"alice\"]\n[Black \"bob\"]\n[Result \"1-0\"]\n[Link \"https://www.chess.com/game/live/9001\"]\n\n1. e4 {[%clk 0:03:00]} 1... e5 {[%clk 0:02:59.1]} 2. Nf3 {[%clk 0:02:58]} 2... Nc6 {[%clk 0:02:57.2]} 3. Bb5 {[%clk 0:02:56]} 3... a6 {[%clk 0:02:55]} 1-0",
+      "time_control": "180+2",
+      "end_time": 1700001000,
+      "rated": true,
+      "rules": "chess",
+      "time_class": "blitz",
+      "white": {
+        "username": "alice",
+        "rating": 1500,
+        "result": "win"
+      },
+      "black": {
+        "username": "bob",
+        "rating": 1550,
+        "result": "checkmated"
+      }
+    },
+    {
+      "url": "https://www.chess.com/game/live/9002",
+      "pgn": "[Event \"Live Chess\"]\n[Site \"Chess.com\"]\n[White \"alice\"]\n[Black \"carol\"]\n[Result \"1-0\"]\n[Link \"https://www.chess.com/game/live/9002\"]\n\n1. e4 {[%clk 0:03:00]} 1... e5 {[%clk 0:02:59.1]} 2. Nf3 {[%clk 0:02:58]} 2... Nc6 {[%clk 0:02:57.2]} 3. Bb5 {[%clk 0:02:56]} 3... a6 {[%clk 0:02:55]} 1-0",
+      "time_control": "600",
+      "end_time": 1700002000,
+      "rated": true,
+      "rules": "chess",
+      "time_class": "rapid",
+      "white": {
+        "username": "alice",
+        "rating": 1900,
+        "result": "win"
+      },
+      "black": {
+        "username": "carol",
+        "rating": 1880,
+        "result": "timeout"
+      }
+    },
+    {
+      "url": "https://www.chess.com/game/live/9003",
+      "pgn": "[Event \"Live Chess\"]\n[Site \"Chess.com\"]\n[White \"dave\"]\n[Black \"alice\"]\n[Result \"0-1\"]\n[Link \"https://www.chess.com/game/live/9003\"]\n\n1. e4 {[%clk 0:03:00]} 1... e5 {[%clk 0:02:59.1]} 2. Nf3 {[%clk 0:02:58]} 2... Nc6 {[%clk 0:02:57.2]} 3. Bb5 {[%clk 0:02:56]} 3... a6 {[%clk 0:02:55]} 0-1",
+      "time_control": "180+2",
+      "end_time": 1700003000,
+      "rated": true,
+      "rules": "chess",
+      "time_class": "blitz",
+      "white": {
+        "username": "dave",
+        "rating": 1470,
+        "result": "resigned"
+      },
+      "black": {
+        "username": "alice",
+        "rating": 1512,
+        "result": "win"
+      }
+    },
+    {
+      "url": "https://www.chess.com/game/live/9004",
+      "pgn": "[Event \"Live Chess\"]\n[Site \"Chess.com\"]\n[White \"alice\"]\n[Black \"erin\"]\n[Result \"0-1\"]\n[Link \"https://www.chess.com/game/live/9004\"]\n\n1. e4 {[%clk 0:03:00]} 1... e5 {[%clk 0:02:59.1]} 2. Nf3 {[%clk 0:02:58]} 2... Nc6 {[%clk 0:02:57.2]} 3. Bb5 {[%clk 0:02:56]} 3... a6 {[%clk 0:02:55]} 0-1",
+      "time_control": "180+2",
+      "end_time": 1700004000,
+      "rated": true,
+      "rules": "chess",
+      "time_class": "blitz",
+      "white": {
+        "username": "alice",
+        "rating": 1498,
+        "result": "timeout"
+      },
+      "black": {
+        "username": "erin",
+        "rating": 1700,
+        "result": "win"
+      }
+    },
+    {
+      "url": "https://www.chess.com/game/live/9005",
+      "pgn": "[Event \"Live Chess\"]\n[Site \"Chess.com\"]\n[White \"alice\"]\n[Black \"frank\"]\n[Result \"1-0\"]\n[Link \"https://www.chess.com/game/live/9005\"]\n\n1. e4 {[%clk 0:03:00]} 1... e5 {[%clk 0:02:59.1]} 2. Nf3 {[%clk 0:02:58]} 2... Nc6 {[%clk 0:02:57.2]} 3. Bb5 {[%clk 0:02:56]} 3... a6 {[%clk 0:02:55]} 1-0",
+      "time_control": "180+2",
+      "end_time": 1700005000,
+      "rated": false,
+      "rules": "chess",
+      "time_class": "blitz",
+      "white": {
+        "username": "alice",
+        "rating": 1520,
+        "result": "win"
+      },
+      "black": {
+        "username": "frank",
+        "rating": 1400,
+        "result": "abandoned"
+      }
+    },
+    {
+      "url": "https://www.chess.com/game/live/9006",
+      "pgn": "[Event \"Live Chess\"]\n[Site \"Chess.com\"]\n[White \"alice\"]\n[Black \"gina\"]\n[Result \"1-0\"]\n[Link \"https://www.chess.com/game/live/9006\"]\n\n1. e4 {[%clk 0:03:00]} 1... e5 {[%clk 0:02:59.1]} 2. Nf3 {[%clk 0:02:58]} 2... Nc6 {[%clk 0:02:57.2]} 3. Bb5 {[%clk 0:02:56]} 3... a6 {[%clk 0:02:55]} 1-0",
+      "time_control": "180+2",
+      "end_time": 1700006000,
+      "rated": true,
+      "rules": "chess960",
+      "time_class": "blitz",
+      "white": {
+        "username": "alice",
+        "rating": 1500,
+        "result": "win"
+      },
+      "black": {
+        "username": "gina",
+        "rating": 1500,
+        "result": "resigned"
+      }
+    },
+    {
+      "url": "https://www.chess.com/game/live/9007",
+      "pgn": "[Event \"Live Chess\"]\n[Site \"Chess.com\"]\n[White \"hank\"]\n[Black \"ivy\"]\n[Result \"1-0\"]\n[Link \"https://www.chess.com/game/live/9007\"]\n\n1. e4 {[%clk 0:03:00]} 1... e5 {[%clk 0:02:59.1]} 2. Nf3 {[%clk 0:02:58]} 2... Nc6 {[%clk 0:02:57.2]} 3. Bb5 {[%clk 0:02:56]} 3... a6 {[%clk 0:02:55]} 1-0",
+      "time_control": "180+2",
+      "end_time": 1700007000,
+      "rated": true,
+      "rules": "chess",
+      "time_class": "blitz",
+      "white": {
+        "username": "hank",
+        "rating": 1500,
+        "result": "win"
+      },
+      "black": {
+        "username": "ivy",
+        "rating": 1500,
+        "result": "resigned"
+      }
+    },
+    {
+      "url": "https://www.chess.com/game/live/9008",
+      "pgn": "[Event \"Live Chess\"]\n[Site \"Chess.com\"]\n[White \"alice\"]\n[Black \"judy\"]\n[Result \"1-0\"]\n[Link \"https://www.chess.com/game/live/9008\"]\n\n1. e4 {[%clk 0:03:00]} 1... e5 {[%clk 0:02:59.1]} 2. Nf3 {[%clk 0:02:58]} 2... Nc6 {[%clk 0:02:57.2]} 3. Bb5 {[%clk 0:02:56]} 3... a6 {[%clk 0:02:55]} 1-0",
+      "time_control": "180+2",
+      "end_time": 1700008000,
+      "rated": true,
+      "rules": "chess",
+      "time_class": "blitz",
+      "white": {
+        "username": "alice",
+        "rating": 1490,
+        "result": "win"
+      },
+      "black": {
+        "username": "judy",
+        "rating": 1748,
+        "result": "resigned"
+      }
+    },
+    {
+      "url": "https://www.chess.com/game/live/9009",
+      "pgn": "[Event \"Live Chess\"]\n[Site \"Chess.com\"]\n[White \"alice\"]\n[Black \"kate\"]\n[Result \"1/2-1/2\"]\n[Link \"https://www.chess.com/game/live/9009\"]\n\n1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 1/2-1/2",
+      "time_control": "1/259200",
+      "end_time": 1700009000,
+      "rated": true,
+      "rules": "chess",
+      "time_class": "daily",
+      "white": {
+        "username": "alice",
+        "rating": 1200,
+        "result": "agreed"
+      },
+      "black": {
+        "username": "kate",
+        "rating": 1210,
+        "result": "agreed"
+      }
+    }
+  ]
+}
