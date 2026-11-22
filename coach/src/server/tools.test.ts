@@ -207,10 +207,11 @@ describe('coach_start_analysis', () => {
     const runner = createRunner(() => gatedEngine(Promise.resolve()), source([game(1), game(2)]));
     const client = await connect(deps(runner));
     const res = (await client.callTool({ name: 'coach_start_analysis', arguments: { usernames: ['alice'] } })) as CallResult;
-    expect(res.structuredContent).toMatchObject({ total: 2, cached: 0 });
-    expect(textOf(res)).toContain('2 blitz games');
+    // Finish the job before any assertion can fail, so nothing writes after the temp home is gone.
     await runner.wait(res.structuredContent?.jobId as string);
     await runner.close();
+    expect(res.structuredContent).toMatchObject({ total: 2, cached: 0 });
+    expect(textOf(res)).toContain('2 blitz games');
   });
 
   it('refuses a batch over 50 games when memory is low', async () => {
