@@ -1,0 +1,714 @@
+/* Report card ("scouting report"). It paints its own card, so it carries its own tokens:
+   dark by default (with no host theme too), light only when the host says light. */
+
+/* Two classes, so this wins over .pg-wrap in widget.css whatever the bundle order. */
+.pg-wrap.pg-wrap--report {
+  padding: 0;
+  max-width: none;
+}
+
+.rc {
+  --rc-bg: radial-gradient(120% 80% at 0% 0%, #16233a 0%, #0d1320 45%, #0a0e16 100%);
+  --rc-border: rgba(148, 163, 184, 0.16);
+  --rc-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --rc-sheen: radial-gradient(circle, rgba(94, 234, 212, 0.12), transparent 60%);
+  --rc-text: #e8edf5;
+  --rc-strong: #f1f5f9;
+  --rc-soft: #a3adbd;
+  --rc-muted: #8b95a7;
+  --rc-rule: rgba(148, 163, 184, 0.14);
+  --rc-accent: #5eead4;
+  --rc-fill0: rgba(94, 234, 212, 0.14);
+  --rc-fill1: rgba(94, 234, 212, 0.42);
+  --rc-glow: rgba(94, 234, 212, 0.5);
+  --rc-peer: rgba(226, 232, 240, 0.85);
+  --rc-grid: rgba(148, 163, 184, 0.15);
+  --rc-range: rgba(94, 234, 212, 0.24);
+  --rc-dot: #0b1220;
+  --rc-good-bg: rgba(34, 197, 94, 0.14);
+  --rc-good-fg: #86efac;
+  --rc-good-icon: #22c55e;
+  --rc-good-on: #052e16;
+  --rc-bad-bg: rgba(244, 63, 94, 0.16);
+  --rc-bad-fg: #fda4af;
+  --rc-bad-icon: #f43f5e;
+  --rc-bad-on: #ffffff;
+  --rc-neutral-bg: rgba(148, 163, 184, 0.16);
+  --rc-neutral-fg: #cbd5e1;
+  --rc-neutral-icon: #94a3b8;
+  --rc-neutral-on: #0f172a;
+  --rc-wrong: #fb7185;
+  --rc-best: #4ade80;
+  --rc-loss: #fda4af;
+  --rc-card-bg: rgba(255, 255, 255, 0.035);
+  --rc-card-border: rgba(148, 163, 184, 0.14);
+  --rc-card-shadow: none;
+  --rc-track: rgba(148, 163, 184, 0.2);
+  --rc-progress: #5eead4;
+  --rc-pill-bg: rgba(94, 234, 212, 0.12);
+  --rc-pill-fg: #99f6e4;
+  --rc-cta-bg: linear-gradient(135deg, #5eead4, #2dd4bf 55%, #14b8a6);
+  --rc-cta-fg: #04231f;
+  --rc-cta-shadow: 0 10px 30px rgba(45, 212, 191, 0.3);
+  --rc-ghost-bg: rgba(148, 163, 184, 0.12);
+  --rc-ghost-fg: #cbd5e1;
+  --rc-sq-dark: #4b5a45;
+  --rc-sq-light: #c9cdb8;
+  --rc-board-shadow: 0 8px 20px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+:root[data-theme='light'] .rc {
+  --rc-bg: radial-gradient(120% 80% at 0% 0%, #e3f5f1 0%, #f5f8fb 48%, #ffffff 100%);
+  --rc-border: rgba(15, 23, 42, 0.08);
+  --rc-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --rc-sheen: radial-gradient(circle, rgba(20, 184, 166, 0.1), transparent 60%);
+  --rc-text: #1e293b;
+  --rc-strong: #0f172a;
+  --rc-soft: #475569;
+  --rc-muted: #64748b;
+  --rc-rule: rgba(15, 23, 42, 0.08);
+  --rc-accent: #0d9488;
+  --rc-fill0: rgba(13, 148, 136, 0.08);
+  --rc-fill1: rgba(13, 148, 136, 0.26);
+  --rc-glow: rgba(13, 148, 136, 0.28);
+  --rc-peer: rgba(15, 23, 42, 0.72);
+  --rc-grid: rgba(15, 23, 42, 0.09);
+  --rc-range: rgba(13, 148, 136, 0.2);
+  --rc-dot: #ffffff;
+  --rc-good-bg: rgba(22, 163, 74, 0.1);
+  --rc-good-fg: #15803d;
+  --rc-good-icon: #16a34a;
+  --rc-good-on: #ffffff;
+  --rc-bad-bg: rgba(225, 29, 72, 0.09);
+  --rc-bad-fg: #be123c;
+  --rc-bad-icon: #e11d48;
+  --rc-bad-on: #ffffff;
+  --rc-neutral-bg: rgba(100, 116, 139, 0.12);
+  --rc-neutral-fg: #475569;
+  --rc-neutral-icon: #94a3b8;
+  --rc-neutral-on: #ffffff;
+  --rc-wrong: #e11d48;
+  --rc-best: #15803d;
+  --rc-loss: #be123c;
+  --rc-card-bg: #ffffff;
+  --rc-card-border: rgba(15, 23, 42, 0.07);
+  --rc-card-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 8px 24px rgba(15, 23, 42, 0.06);
+  --rc-track: #e2e8f0;
+  --rc-progress: #0d9488;
+  --rc-pill-bg: rgba(13, 148, 136, 0.1);
+  --rc-pill-fg: #0f766e;
+  --rc-cta-bg: linear-gradient(135deg, #14b8a6, #0d9488 55%, #0f766e);
+  --rc-cta-fg: #ffffff;
+  --rc-cta-shadow: 0 10px 24px rgba(13, 148, 136, 0.26);
+  --rc-ghost-bg: rgba(15, 23, 42, 0.06);
+  --rc-ghost-fg: #334155;
+  --rc-sq-dark: #6f7d5a;
+  --rc-sq-light: #e9e6d6;
+  --rc-board-shadow: 0 6px 16px rgba(15, 23, 42, 0.12), 0 0 0 1px rgba(15, 23, 42, 0.06);
+}
+
+.rc {
+  position: relative;
+  overflow: hidden;
+  box-sizing: border-box;
+  padding: 24px 24px 22px;
+  border-radius: 18px;
+  border: 1px solid var(--rc-border);
+  background: var(--rc-bg);
+  box-shadow: var(--rc-shadow);
+  color: var(--rc-text);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.rc *,
+.rc *::before,
+.rc *::after {
+  box-sizing: border-box;
+}
+.rc-sheen {
+  position: absolute;
+  top: -260px;
+  right: -160px;
+  width: 520px;
+  height: 520px;
+  background: var(--rc-sheen);
+  pointer-events: none;
+}
+/* Low specificity, so each button's own class sets its size. */
+:where(.rc) button {
+  font: inherit;
+}
+
+/* Header */
+.rc-head {
+  position: relative;
+}
+.rc-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 26px;
+}
+.rc-eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--rc-accent);
+  font-weight: 600;
+}
+.rc-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 11px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--rc-ghost-bg);
+  color: var(--rc-ghost-fg);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.rc-ghost:hover {
+  filter: brightness(1.15);
+}
+.rc-titleRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+}
+.rc-title {
+  margin: 2px 0 0;
+  color: var(--rc-strong);
+  font: 700 30px/1.05 -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+  letter-spacing: -0.02em;
+}
+.rc-meta {
+  text-align: right;
+  flex: none;
+}
+.rc-metaBig {
+  color: var(--rc-strong);
+  font: 700 30px/1 -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+.rc-metaSmall {
+  margin-top: 4px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--rc-muted);
+}
+
+/* Radar */
+.rc-body {
+  position: relative;
+}
+.rc-left {
+  margin: 10px -8px 0;
+}
+.rc-radar {
+  position: relative;
+  width: 100%;
+  max-width: 560px;
+  margin: 0 auto;
+}
+.rc-radar svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.rc-grid {
+  fill: none;
+  stroke: var(--rc-grid);
+  stroke-width: 1;
+}
+.rc-spoke {
+  stroke: var(--rc-grid);
+  stroke-width: 1;
+}
+.rc-spoke--faint {
+  stroke-dasharray: 2 4;
+  opacity: 0.7;
+}
+.rc-range {
+  stroke: var(--rc-range);
+  stroke-width: 7;
+  stroke-linecap: round;
+}
+.rc-stop0 {
+  stop-color: var(--rc-fill0);
+}
+.rc-stop1 {
+  stop-color: var(--rc-fill1);
+}
+.rc-peer {
+  fill: none;
+  stroke: var(--rc-peer);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 5;
+  stroke-linejoin: round;
+}
+.rc-peerDot {
+  fill: none;
+  stroke: var(--rc-peer);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 3;
+}
+.rc-you {
+  stroke: var(--rc-accent);
+  stroke-width: 2.2;
+  stroke-linejoin: round;
+}
+.rc-youGlow {
+  fill: none;
+  stroke: var(--rc-glow);
+  stroke-width: 6;
+}
+.rc-youDot {
+  fill: var(--rc-dot);
+  stroke: var(--rc-accent);
+  stroke-width: 2;
+}
+.rc-axis {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  white-space: nowrap;
+}
+.rc-axisName {
+  font-weight: 650;
+  font-size: 13px;
+  color: var(--rc-strong);
+}
+.rc-axisNums {
+  font-size: 12px;
+  margin-top: 1px;
+  font-variant-numeric: tabular-nums;
+}
+.rc-axisNums b {
+  color: var(--rc-accent);
+  font-weight: 650;
+}
+.rc-axisNums span {
+  color: var(--rc-muted);
+}
+.rc-axis--faint {
+  opacity: 0.5;
+}
+
+/* Verdict chips */
+.rc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 4px;
+  padding: 2px 9px 2px 4px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.rc-chipIcon {
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  font-size: 10px;
+  line-height: 1;
+}
+.rc-chip--good {
+  background: var(--rc-good-bg);
+  color: var(--rc-good-fg);
+}
+.rc-chip--good .rc-chipIcon {
+  background: var(--rc-good-icon);
+  color: var(--rc-good-on);
+}
+.rc-chip--bad {
+  background: var(--rc-bad-bg);
+  color: var(--rc-bad-fg);
+}
+.rc-chip--bad .rc-chipIcon {
+  background: var(--rc-bad-icon);
+  color: var(--rc-bad-on);
+}
+.rc-chip--neutral,
+.rc-chip--faint {
+  background: var(--rc-neutral-bg);
+  color: var(--rc-neutral-fg);
+}
+.rc-chip--neutral .rc-chipIcon,
+.rc-chip--faint .rc-chipIcon {
+  background: var(--rc-neutral-icon);
+  color: var(--rc-neutral-on);
+}
+
+/* Fewer than three areas: a plain list instead of the chart */
+.rc-areaList {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0 8px;
+}
+.rc-areaList li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--rc-rule);
+}
+.rc-areaList li:first-child {
+  border-top: 0;
+}
+.rc-areaList .rc-axisName {
+  min-width: 140px;
+}
+.rc-areaList .rc-chip {
+  margin-top: 0;
+}
+
+/* Legend */
+.rc-legend {
+  margin-top: 6px;
+  padding: 0 8px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--rc-soft);
+}
+.rc-keys {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 16px;
+}
+.rc-keys span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.rc-keys i {
+  display: inline-block;
+}
+.rc-kYou {
+  width: 14px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--rc-fill1);
+  border: 1.5px solid var(--rc-accent);
+}
+.rc-kPeer {
+  width: 16px;
+  height: 0;
+  border-top: 1.5px dashed var(--rc-peer);
+}
+.rc-kRange {
+  width: 16px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--rc-range);
+}
+.rc-legendStrong {
+  margin-top: 6px;
+  color: var(--rc-strong);
+  font-weight: 600;
+}
+.rc-legendNote {
+  margin: 3px auto 0;
+  max-width: 440px;
+  color: var(--rc-muted);
+  font-size: 11.5px;
+}
+
+/* Verdict */
+.rc-right {
+  position: relative;
+  margin-top: 18px;
+}
+.rc-verdict {
+  padding-top: 16px;
+  border-top: 1px solid var(--rc-rule);
+}
+.rc-kicker {
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--rc-muted);
+  font-weight: 600;
+}
+.rc-verdictText {
+  margin: 6px 0 0;
+  color: var(--rc-strong);
+  font: 650 23px/1.2 -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+  letter-spacing: -0.015em;
+}
+.rc-verdictText em {
+  font-style: normal;
+  color: var(--rc-accent);
+}
+.rc-sub {
+  margin: 8px 0 0;
+  color: var(--rc-soft);
+  font-size: 14px;
+}
+
+/* Missions */
+.rc-missions {
+  margin-top: 20px;
+}
+.rc-secHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.rc-secHead h3 {
+  margin: 0;
+  color: var(--rc-strong);
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.005em;
+}
+.rc-count {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--rc-pill-bg);
+  color: var(--rc-pill-fg);
+  font-size: 12px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.rc-missionList {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+.rc-mission {
+  display: grid;
+  grid-template-columns: 116px minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  padding: 10px 14px 10px 10px;
+  border-radius: 14px;
+  background: var(--rc-card-bg);
+  border: 1px solid var(--rc-card-border);
+  box-shadow: var(--rc-card-shadow);
+}
+.rc-mini {
+  width: 100%;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: var(--rc-board-shadow);
+}
+.rc-mKicker {
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--rc-accent);
+  font-weight: 700;
+}
+.rc-mTitle {
+  margin-top: 1px;
+  color: var(--rc-strong);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.rc-best {
+  color: var(--rc-best);
+}
+.rc-wrong {
+  color: var(--rc-wrong);
+  font-weight: 650;
+  text-decoration-thickness: 1.5px;
+}
+.rc-mMeta {
+  margin-top: 2px;
+  color: var(--rc-soft);
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+.rc-mLoss {
+  margin-top: 3px;
+  color: var(--rc-loss);
+  font-size: 12.5px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.rc-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 7px;
+  color: var(--rc-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.rc-bar {
+  flex: 1;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--rc-track);
+  overflow: hidden;
+}
+.rc-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--rc-progress);
+}
+.rc-focus {
+  margin: 18px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--rc-card-bg);
+  border: 1px solid var(--rc-card-border);
+}
+
+/* Call to action */
+.rc-cta {
+  width: 100%;
+  margin-top: 16px;
+  padding: 14px 18px;
+  border: 0;
+  border-radius: 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--rc-cta-bg);
+  color: var(--rc-cta-fg);
+  box-shadow: var(--rc-cta-shadow);
+  font-size: 15px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.rc-cta:hover {
+  filter: brightness(1.05);
+}
+.rc-cta:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+.rc-cta:focus-visible,
+.rc-ghost:focus-visible {
+  outline: 2px solid var(--rc-accent);
+  outline-offset: 2px;
+}
+.rc-status {
+  margin: 8px 0 0;
+  color: var(--rc-soft);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* Fullscreen: the chart on the left, verdict and missions on the right. */
+.rc[data-mode='fullscreen'] {
+  min-height: 100vh;
+  border-radius: 0;
+  border: 0;
+  padding: 26px 40px 24px;
+}
+@media (min-width: 900px) {
+  .rc[data-mode='fullscreen'] .rc-title,
+  .rc[data-mode='fullscreen'] .rc-metaBig {
+    font-size: 34px;
+  }
+  .rc[data-mode='fullscreen'] .rc-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+    gap: 40px;
+    align-items: center;
+    margin-top: 4px;
+  }
+  .rc[data-mode='fullscreen'] .rc-left {
+    margin: 0;
+  }
+  .rc[data-mode='fullscreen'] .rc-right {
+    margin-top: 0;
+  }
+  .rc[data-mode='fullscreen'] .rc-verdict {
+    padding-top: 0;
+    border-top: 0;
+  }
+  .rc[data-mode='fullscreen'] .rc-verdictText {
+    font-size: 27px;
+  }
+  /* Missions side by side, board on top, as in the scouting-report layout. */
+  .rc[data-mode='fullscreen'] .rc-missions {
+    margin-top: 18px;
+  }
+  .rc[data-mode='fullscreen'] .rc-missionList {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .rc[data-mode='fullscreen'] .rc-mission {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    align-content: start;
+    gap: 10px;
+    padding: 10px 10px 12px;
+  }
+  .rc[data-mode='fullscreen'] .rc-mTitle {
+    font-size: 15.5px;
+  }
+  .rc[data-mode='fullscreen'] .rc-mMeta,
+  .rc[data-mode='fullscreen'] .rc-mLoss {
+    font-size: 12px;
+  }
+  /* Narrow cards: "wrong in N of M games" gets its own line rather than breaking mid-phrase. */
+  .rc[data-mode='fullscreen'] .rc-sep {
+    display: none;
+  }
+  .rc[data-mode='fullscreen'] .rc-mCount {
+    display: block;
+  }
+  .rc[data-mode='fullscreen'] .rc-mCount::first-letter {
+    text-transform: uppercase;
+  }
+}
+
+/* The list under the chart is for narrow frames only (see below). */
+.rc-areaList--narrow {
+  display: none;
+}
+
+/* Narrow frames: the chart's labels would collide, so the chart shows area names only and
+   the numbers and verdicts move to the list under it. */
+@media (max-width: 539px) {
+  .rc-radar .rc-axisNums,
+  .rc-radar .rc-chip {
+    display: none;
+  }
+  .rc-radar .rc-axisName {
+    font-size: 11.5px;
+  }
+  .rc-areaList--narrow {
+    display: block;
+    margin-top: 6px;
+  }
+  .rc-areaList--narrow .rc-axisName {
+    min-width: 0;
+    flex: 1 1 100%;
+  }
+}
+@media (max-width: 480px) {
+  .rc {
+    padding: 18px 16px;
+  }
+  .rc-title,
+  .rc-metaBig {
+    font-size: 24px;
+  }
+  .rc-mission {
+    grid-template-columns: 84px minmax(0, 1fr);
+    gap: 10px;
+  }
+}
