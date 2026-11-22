@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { CachedGame } from '../analysis/cache';
 import { STATS_CFG } from '../config';
 import { AREA_KEYS, type AreaKey } from './areas';
-import { diagnose, type AreaFinding, type Baseline, type Diagnosis } from './diagnose';
+import { areaFinding, diagnose, type AreaFinding, type Baseline, type Diagnosis } from './diagnose';
 import { fixtureGame, middlegameSet, randomSans, shuffleSans, testRng } from './testGames';
 
 const row = (d: Diagnosis, area: AreaKey): AreaFinding => d.areas.find((a) => a.area === area)!;
@@ -44,6 +44,30 @@ describe('diagnose', () => {
     expect(d.focus).toEqual({ kind: 'area', area: 'middlegame' });
     // no endgame, converting or defending moves in these games
     for (const a of ['endgame', 'converting', 'defending'] as AreaKey[]) expect(row(d, a).label).toBe('notEnoughData');
+  });
+
+  it('smallButClearGapIsCalledGapByTheBriefOrder', () => {
+    // Pins the label order (gap is checked before notYourProblem): 2% vs 1% over 300 games is a
+    // real 1-point gap whose 95% range also sits below meaningfulGapPts. It is called a gap.
+    const d = diagnose(middlegameSet(300, 180, 90, 21), ['alice']);
+    const mg = row(d, 'middlegame');
+    expect(mg.gapPts).toBeCloseTo(1, 10);
+    expect(mg.ci95[1]).toBeLessThan(STATS_CFG.meaningfulGapPts);
+    expect(mg.ciAdj[0]).toBeGreaterThan(0);
+    expect(mg.label).toBe('gap');
+    expect(d.focus).toEqual({ kind: 'area', area: 'middlegame' });
+  });
+
+  it('thinnerSideDecidesNotEnoughData', () => {
+    // Plenty of opponent moves cannot make up for too few of the player's (and the reverse).
+    const fewMyGames = Array.from({ length: 60 }, (_, i) => ({ myErr: 1, myN: i < 20 ? 30 : 0, oppErr: 1, oppN: 30 }));
+    const a = areaFinding('converting', fewMyGames);
+    expect(a.label).toBe('notEnoughData');
+    expect(a.notes).toContain('your moves here come from only 20 games; 30 needed');
+    const fewOppMoves = Array.from({ length: 60 }, () => ({ myErr: 1, myN: 30, oppErr: 0, oppN: 2 }));
+    const b = areaFinding('defending', fewOppMoves);
+    expect(b.label).toBe('notEnoughData');
+    expect(b.notes).toContain("only 120 of your opponents' moves fall here; 150 needed");
   });
 
   it('fewGamesGivesNotEnoughData', () => {
