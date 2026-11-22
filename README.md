@@ -14,6 +14,11 @@ played, and an evaluation graph — without a paid subscription.
 You keep playing on Chess.com. Postgame is where you go afterward to understand
 what happened.
 
+<p align="center">
+  <img src="docs/images/review-screen.png" width="360"
+       alt="Postgame review screen: accuracy for both players, a Blunder badge on the board, the better move, and the engine's best line">
+</p>
+
 > **What's next: Postgame Coach.** Claude + Stockfish as a personal coach that
 > reads all your games, finds the one thing actually holding you back, and drills
 > it in Postgame's Train section. It will be a local MCP server plus a Claude Code
