@@ -4,37 +4,39 @@
  * board widget (BOARD_URI) return a `CoachView` as `structuredContent`.
  *
  * Every move and number shown comes from a tool: the stats (diagnosis), the game record, or
- * a deep engine search (DISPLAY_CFG) made just before a position is shown. Quick-search
- * (ENGINE_CFG) best moves and win % are never printed in the text. (The Diagnosis passed as
- * structuredContent still carries each repeated position's quick-search `best`; the tool
- * descriptions send the model to coach_explain_position before it names a best move.)
+ * a deep engine search (DISPLAY_CFG) made just before a position is shown. Nothing model-facing
+ * carries a quick-search (ENGINE_CFG) best move; the quick check's win-% losses of repeated
+ * positions are labelled approximate.
  *
  * Dependencies are passed in, so tests run with fake engines and sources and never touch
  * Stockfish, the network or the real coach home.
  */
+import { createHash } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerAppTool } from '@modelcontextprotocol/ext-apps/server';
+import { Chess } from 'chess.js';
 import { z } from 'zod';
 import { formatLineSan } from '../../../src/analysis/lines';
-import type { Engine, Evaluation } from '../../../src/services/engine/types';
 import type { TimeClass } from '../../../src/types';
-import { readCached } from '../analysis/cache';
+import { readCached, type CachedGame } from '../analysis/cache';
 import type { JobStatus, Query, Runner } from '../analysis/runner';
-import { deepPositionFacts, examplePositions, type PositionFacts } from '../coaching/explain';
-import { DISPLAY_CFG, ENGINE_CFG, SOURCE_CFG, STATS_CFG } from '../config';
-import { AREA_NAMES } from '../diagnosis/areas';
+import { deepDisagrees, deepPositionFacts, examplePositions, repeatedRefs, type PositionFacts } from '../coaching/explain';
+import { ENGINE_CFG, DISPLAY_CFG, SOURCE_CFG, STATS_CFG } from '../config';
+import { AREA_NAMES, gamePlies } from '../diagnosis/areas';
 import { diagnose, type AreaFinding, type Diagnosis } from '../diagnosis/diagnose';
+import type { RepeatedPosition } from '../diagnosis/repeated';
+import { guardDisplayEngine, type DisplayEngine } from '../engine/displayEngine';
 import { BOARD_URI } from './boardResource';
 import { toAnswerView } from './views';
 
-/** The deep-search engine (built with DISPLAY_CFG): one instance, created on first use. */
-export interface DisplayEngine {
-  get(): Engine;
+/** Holds the one display engine (from `createDisplayEngine`), created on first use. */
+export interface DisplaySlot {
+  get(): DisplayEngine;
   /**
    * Forgets (and closes) `failed` after a failure, so the next `get` builds a fresh one. Does
    * nothing if a newer engine has replaced it meanwhile.
    */
-  reset(failed: Engine): void;
+  reset(failed: DisplayEngine): void;
 }
 
 export interface EngineInfo {
@@ -45,23 +47,25 @@ export interface EngineInfo {
 }
 
 export interface CoachDeps {
+  /** Its engine factory refuses to start Stockfish when memory is low (server.ts). */
   runner: Runner;
-  display: DisplayEngine;
+  display: DisplaySlot;
   engineInfo(): EngineInfo;
-  /** Free memory %, checked before a batch of more than 50 games; null when it can't be read. Unchecked when absent. */
-  freeMemoryPct?: () => number | null;
-  /** How long coach_diagnosis waits for the game list before answering with progress. Default 1500 ms. */
+  /** How long coach_diagnosis waits for the game lists before answering with progress. Default 1500 ms. */
   listWaitMs?: number;
-  /** How long coach_start_analysis waits for the game list. Default 20 s. */
+  /** How long coach_start_analysis waits for the game lists. Default 20 s. */
   startWaitMs?: number;
   /** Max time for one deep search before the display engine counts as hung. Default 30 s. */
   searchTimeoutMs?: number;
+  /** The diagnosis itself (tests count calls); default `diagnose`. */
+  diagnose?: typeof diagnose;
 }
 
-/** A batch above this many games needs a memory check first (Mac limits). */
-const BIG_BATCH = 50;
-const MIN_FREE_MEMORY_PCT = 20;
 const EXAMPLES = 3;
+/** Diagnoses kept for repeat calls (one per query set and set of cached games). */
+const MEMO_SIZE = 8;
+/** Repeated positions written out in the text (the focus ones come first); all are in structuredContent. */
+const MAX_REPEATED_LINES = 10;
 
 const NO_INVENTED_FACTS =
   'Never state a move or evaluation that a tool did not return; always say how many games a finding rests on.';
@@ -72,7 +76,20 @@ const TIME_CLASSES = ['bullet', 'blitz', 'rapid', 'daily'] as const;
 const usernamesSchema = z
   .array(z.string().trim().min(1))
   .min(1)
-  .describe("The player's Chess.com usernames (one person; several accounts are pooled)");
+  .optional()
+  .describe("The player's Chess.com usernames (one person; several accounts are pooled). Required unless accounts is given.");
+const accountsSchema = z
+  .array(
+    z.object({
+      username: z.string().trim().min(1),
+      maxGames: z.number().int().min(1).max(1000).describe('How many recent rated games of this account to use'),
+    }),
+  )
+  .min(1)
+  .optional()
+  .describe(
+    "The same player's accounts, each with its own number of recent games. When given, it replaces usernames and maxGames.",
+  );
 const timeClassSchema = z.enum(TIME_CLASSES).default('blitz').describe('Time class of the games to use');
 const maxGamesSchema = z
   .number()
@@ -81,24 +98,49 @@ const maxGamesSchema = z
   .max(1000)
   .default(SOURCE_CFG.defaultMaxGames)
   .describe('How many recent rated games to use');
+
+/** True for a real calendar date written YYYY-MM-DD (so 2026-02-30 is not one). */
+export function isRealDate(s: string): boolean {
+  const t = Date.parse(`${s}T00:00:00Z`);
+  return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === s;
+}
+
 const asOfSchema = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'a date like 2026-10-01')
-  .refine((s) => !Number.isNaN(Date.parse(`${s}T00:00:00Z`)), 'not a real date')
+  .refine(isRealDate, 'not a real date')
   .optional()
   .describe('Only use games that ended before this date (YYYY-MM-DD, UTC). Leave out for the latest games.');
 
 interface QueryArgs {
-  usernames: string[];
+  usernames?: string[];
+  accounts?: { username: string; maxGames: number }[];
   timeClass: TimeClass;
   maxGames: number;
   asOf?: string;
 }
 
-function toQuery(a: QueryArgs): Query {
-  const q: Query = { usernames: a.usernames, timeClass: a.timeClass, maxGames: a.maxGames };
-  if (a.asOf) q.before = Math.floor(Date.parse(`${a.asOf}T00:00:00Z`) / 1000);
-  return q;
+/**
+ * One runner query per account when `accounts` is given (each with its own game limit; the
+ * results are concatenated), else one pooled query for `usernames`. A string is a refusal.
+ */
+function toQueries(a: QueryArgs): Query[] | string {
+  const before = a.asOf ? Math.floor(Date.parse(`${a.asOf}T00:00:00Z`) / 1000) : undefined;
+  const query = (usernames: string[], maxGames: number): Query =>
+    before === undefined ? { usernames, timeClass: a.timeClass, maxGames } : { usernames, timeClass: a.timeClass, maxGames, before };
+  if (a.accounts && a.accounts.length > 0) {
+    const seen = new Set<string>();
+    const out: Query[] = [];
+    for (const acc of a.accounts) {
+      const k = acc.username.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(query([acc.username], acc.maxGames));
+    }
+    return out;
+  }
+  if (a.usernames && a.usernames.length > 0) return [query(a.usernames, a.maxGames)];
+  return "Give the player's Chess.com usernames (or accounts).";
 }
 
 // ---- small helpers ----
@@ -136,24 +178,7 @@ async function within<T>(p: Promise<T>, ms: number): Promise<{ value: T } | null
   }
 }
 
-/** Wraps the display engine: each search has a time limit, and any failure drops the engine. */
-function guardedEngine(display: DisplayEngine, timeoutMs: number): Engine {
-  const engine = display.get();
-  return {
-    async evaluate(fen: string, ms: number): Promise<Evaluation> {
-      try {
-        const r = await within(Promise.resolve(engine.evaluate(fen, ms)), timeoutMs);
-        if (!r) throw new Error(`Stockfish did not answer within ${Math.round(timeoutMs / 1000)} s`);
-        return r.value;
-      } catch (e) {
-        display.reset(engine);
-        throw e;
-      }
-    },
-  };
-}
-
-// ---- text versions ----
+// ---- the diagnosis as the model sees it ----
 
 /** Plain words for an area's label, as the player reads them. */
 export function verdict(a: AreaFinding): string {
@@ -191,26 +216,81 @@ function toRef(f: PositionFacts): ExampleRef {
   };
 }
 
+/**
+ * A repeated position without the quick search's best move. The win-% losses come from the
+ * quick check, so they are named approximate. `example` opens one sighting by the player.
+ */
+export interface RepeatedView {
+  key: string;
+  fen: string;
+  movesFromStart: string[];
+  seen: number;
+  wrong: number;
+  approxAvgLossPts: number;
+  usual: { move: string; times: number; approxLossPts: number }[];
+  gameIds: string[];
+  example: { gameId: string; ply: number } | null;
+}
+
+/** Built field by field, so the engine's `best` can't slip through. */
+function toRepeatedView(r: RepeatedPosition, example: { gameId: string; ply: number } | null): RepeatedView {
+  return {
+    key: r.key,
+    fen: r.fen,
+    movesFromStart: r.movesFromStart,
+    seen: r.seen,
+    wrong: r.wrong,
+    approxAvgLossPts: r.avgLossPts,
+    usual: r.usual.map((u) => ({ move: u.move, times: u.times, approxLossPts: u.lossPts })),
+    gameIds: r.gameIds,
+    example,
+  };
+}
+
+/** The diagnosis as returned to the model: everything but the repeated positions' quick-search best move. */
+export type DiagnosisView = Omit<Diagnosis, 'repeated'> & {
+  repeated: RepeatedView[];
+  examples: ExampleRef[];
+  /** Games per account (only when several accounts are diagnosed together). */
+  gamesByAccount: { username: string; games: number }[];
+};
+
+export function diagnosisView(
+  d: Diagnosis,
+  examples: ExampleRef[],
+  refs: ({ gameId: string; ply: number } | null)[],
+  gamesByAccount: { username: string; games: number }[] = [],
+): DiagnosisView {
+  const { repeated, ...rest } = d;
+  return { ...rest, repeated: repeated.map((r, i) => toRepeatedView(r, refs[i] ?? null)), examples, gamesByAccount };
+}
+
 const moveLabel = (moveNumber: number, mover: 'white' | 'black', san: string) =>
   `${moveNumber}${mover === 'white' ? '.' : '...'} ${san}`;
 
+/** Diagnosis notes that restate the focus; the text prints its own single Focus line instead. */
+const RESTATES_FOCUS = /^(Focus:|No focus yet)/;
+
 /**
  * The diagnosis as text: a table (area, verdict in plain words, the player's %, players at
- * their rating %, game count), the focus, the notes, the repeated positions and example
- * positions by reference. Rows without enough data show no percentages.
+ * their rating %, game count), one focus line, the notes, the repeated positions (game moves
+ * and approximate losses, each with a reference to open it) and example positions by reference.
+ * Rows without enough data show no percentages.
  */
-export function diagnosisText(d: Diagnosis, examples: ExampleRef[]): string {
-  const who = d.usernames.join(', ');
+export function diagnosisText(v: DiagnosisView): string {
   const lines: string[] = [];
   lines.push(
-    `Diagnosis for ${who}: ${plural(d.games, `${d.timeClass} game`)}. Each row compares the share of your moves ` +
-      'that were serious mistakes (a mistake or a blunder) with the same share for players at your rating, ' +
+    `Diagnosis for ${v.usernames.join(', ')}: ${plural(v.games, `${v.timeClass} game`)}. Each row compares the share of ` +
+      'your moves that were serious mistakes (a mistake or a blunder) with the same share for players at your rating, ' +
       'your opponents in the same games.',
   );
+  if (v.gamesByAccount.length > 1) {
+    lines.push(`Games per account: ${v.gamesByAccount.map((a) => `${a.username} ${a.games}`).join(', ')}.`);
+  }
   lines.push('');
   lines.push('| Area | Verdict | You % | Players at your rating % | Games |');
   lines.push('|---|---|---|---|---|');
-  for (const a of d.areas) {
+  for (const a of v.areas) {
     const known = a.label !== 'notEnoughData';
     lines.push(
       `| ${capitalize(AREA_NAMES[a.area])} | ${verdict(a)} | ${known ? pct1(a.myRate) : '–'} | ` +
@@ -219,36 +299,55 @@ export function diagnosisText(d: Diagnosis, examples: ExampleRef[]): string {
   }
   lines.push('');
 
-  const focus = d.focus;
+  const focus = v.focus;
   if (focus?.kind === 'area') {
-    const a = d.areas.find((x) => x.area === focus.area);
+    const a = v.areas.find((x) => x.area === focus.area);
     lines.push(`Focus: ${AREA_NAMES[focus.area]}${a ? ` (${verdict(a)}, ${plural(a.games, 'game')})` : ''}.`);
   } else if (focus?.kind === 'repeated') {
-    lines.push(`Focus: the ${focus.keys.length === 1 ? 'position' : `${focus.keys.length} positions`} you keep getting wrong (below).`);
+    lines.push(
+      `Focus: the ${focus.keys.length === 1 ? 'position' : `${focus.keys.length} positions`} you keep getting wrong ` +
+        '(marked [focus] below).',
+    );
   } else {
-    lines.push('Focus: none yet.');
+    lines.push('Focus: none yet: no area shows a clear gap and no position keeps going wrong.');
   }
 
-  if (d.notes.length > 0) {
+  const notes = v.notes.filter((n) => !RESTATES_FOCUS.test(n));
+  if (notes.length > 0) {
     lines.push('', 'Notes:');
-    for (const n of d.notes) lines.push(`- ${n}`);
+    for (const n of notes) lines.push(`- ${n}`);
   }
 
-  if (d.repeated.length > 0) {
-    lines.push('', 'Positions you keep getting wrong (your moves from the games; the best move is not shown until the position is checked deeply):');
-    d.repeated.forEach((r, i) => {
-      const usual = r.usual.map((u) => `${u.move} ${plural(u.times, 'time')}`).join(', ');
+  if (v.repeated.length > 0) {
+    lines.push(
+      '',
+      'Positions you keep getting wrong (your moves from the games; losses are approximate, from the quick check; ' +
+        'open one with coach_explain_position before naming its best move):',
+    );
+    const focusKeys = new Set(focus?.kind === 'repeated' ? focus.keys : []);
+    v.repeated.slice(0, MAX_REPEATED_LINES).forEach((r, i) => {
       const where = r.movesFromStart.length > 0 ? `After ${formatLineSan(r.movesFromStart, 0)}` : 'In the starting position';
+      const usual = r.usual
+        .map((u) =>
+          u.times === 1
+            ? `${u.move} once (about ${Math.round(u.approxLossPts)}%)`
+            : `${u.move} ${u.times} times (about ${Math.round(u.approxLossPts)}% each time)`,
+        )
+        .join(', ');
       lines.push(
-        `${i + 1}. ${where}: you had to move here in ` +
-          `${plural(r.seen, 'game')} and went wrong ${plural(r.wrong, 'time')}${usual ? ` (you played ${usual})` : ''}.`,
+        `${i + 1}. ${focusKeys.has(r.key) ? '[focus] ' : ''}${where}: you had to move here in ${plural(r.seen, 'game')} ` +
+          `and went wrong ${plural(r.wrong, 'time')}, losing about ${Math.round(r.approxAvgLossPts)}% win chance each time (quick check).` +
+          `${usual ? ` Your moves there: ${usual}.` : ''}` +
+          `${r.example ? ` To show it: gameId ${r.example.gameId}, ply ${r.example.ply}.` : ''}`,
       );
     });
+    const more = v.repeated.length - MAX_REPEATED_LINES;
+    if (more > 0) lines.push(`…and ${plural(more, 'more position')} like these, in the structured data.`);
   }
 
-  if (examples.length > 0) {
+  if (v.examples.length > 0) {
     lines.push('', 'Example positions for the focus (show one with coach_explain_position, using its gameId and ply):');
-    for (const x of examples) {
+    for (const x of v.examples) {
       lines.push(
         `- gameId ${x.gameId}, ply ${x.ply}: you played ${moveLabel(x.moveNumber, x.mover, x.playedSan)} as ` +
           `${capitalize(x.mover)}. Game: ${x.gameUrl}`,
@@ -258,34 +357,46 @@ export function diagnosisText(d: Diagnosis, examples: ExampleRef[]): string {
   return lines.join('\n');
 }
 
-function progressText(st: JobStatus): string {
-  const skipped = st.skipped ? ` ${plural(st.skipped, 'game')} could not be read and will be left out.` : '';
+function progressText(done: number, total: number, skipped: number): string {
+  const skip = skipped ? ` ${plural(skipped, 'game')} could not be read and will be left out.` : '';
   return (
-    `Still working: analysed ${st.done} of ${plural(st.total, 'game')} so far.${skipped} ` +
+    `Still working: analysed ${done} of ${plural(total, 'game')} so far.${skip} ` +
     'The diagnosis needs every game, so ask again in a minute or two.'
   );
 }
 
 /** The deep facts as text, for the model and for hosts without the board. */
-function explainText(f: PositionFacts): string {
+export function explainText(f: PositionFacts, disagrees: boolean): string {
   const side = capitalize(f.mover);
   const moveNumber = Math.floor(f.ply / 2) + 1;
+  const after = new Chess(f.fenAfter);
+  const mated = after.isCheckmate();
+  const stalemate = after.isStalemate();
   const lines = [
     `Game ${f.gameUrl}, move ${moveLabel(moveNumber, f.mover, f.playedSan)} (ply ${f.ply}, ${side} to move).`,
     `Position before the move (FEN): ${f.fenBefore}`,
     `${side} played ${f.playedSan} (${f.playedUci}).`,
-    f.bestSan
-      ? `Stockfish's best move: ${f.bestSan} (${f.bestUci}).`
-      : `${f.playedSan} was Stockfish's first choice.`,
   ];
-  if (f.bestLineSan?.length) lines.push(`Best line: ${formatLineSan(f.bestLineSan, f.ply)}.`);
+  if (mated) {
+    lines.push(`${f.playedSan} is checkmate, so it is the best move: the game ended here and nothing needed searching.`);
+  } else {
+    lines.push(f.bestSan ? `Stockfish's best move: ${f.bestSan} (${f.bestUci}).` : `${f.playedSan} was Stockfish's first choice.`);
+    if (f.bestLineSan?.length) lines.push(`Best line: ${formatLineSan(f.bestLineSan, f.ply)}.`);
+  }
   lines.push(`${side}'s win chance: ${Math.round(f.winBefore)}% before the move, ${Math.round(f.winAfter)}% after.`);
   if (f.refutationSan?.length) lines.push(`The opponent's strongest reply after ${f.playedSan}: ${formatLineSan(f.refutationSan, f.ply + 1)}.`);
   if (f.reason) lines.push(`Why: ${f.reason}`);
-  lines.push(
-    `Engine check: Stockfish, ${DISPLAY_CFG.movetimeMs / 1000} s on each position (before and after the move), ` +
-      'just now; these are the only moves and numbers to quote for this position.',
-  );
+  if (disagrees) lines.push("On a deeper check this move holds up, so it isn't a real mistake.");
+  if (mated) {
+    lines.push('Decided by the rules (checkmate); these are the only moves and numbers to quote for this position.');
+  } else if (stalemate) {
+    lines.push(
+      'The position before the move was checked with a deeper search just now; stalemate after it is a draw by the rules. ' +
+        'These are the only moves and numbers to quote for this position.',
+    );
+  } else {
+    lines.push('Checked with a deeper search just now; these are the only moves and numbers to quote for this position.');
+  }
   return lines.join('\n');
 }
 
@@ -312,12 +423,26 @@ export function coachMeText(username: string): string {
   ].join('\n');
 }
 
+/** Unique by game id (first wins): two of the player's accounts may have played each other. */
+function uniqueGames(lists: CachedGame[][]): CachedGame[] {
+  const seen = new Set<string>();
+  const out: CachedGame[] = [];
+  for (const c of lists.flat()) {
+    if (seen.has(c.game.id)) continue;
+    seen.add(c.game.id);
+    out.push(c);
+  }
+  return out;
+}
+
 // ---- registration ----
 
 export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
   const listWaitMs = deps.listWaitMs ?? 1500;
   const startWaitMs = deps.startWaitMs ?? 20_000;
   const searchTimeoutMs = deps.searchTimeoutMs ?? 30_000;
+  const diagnoseFn = deps.diagnose ?? diagnose;
+  const memo = new Map<string, { view: DiagnosisView; text: string }>();
 
   /** Starts by query, from this server session: the diagnosis reuses them instead of re-walking the archives. */
   interface Tracked {
@@ -329,25 +454,20 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
   const tracked = new Map<string, Tracked>();
   const keyOf = (q: Query) => JSON.stringify([[...q.usernames].sort(), q.timeClass, q.maxGames, q.before ?? null]);
 
-  /** A memory problem that should stop a new batch, or null. */
-  function memoryRefusal(q: Query): string | null {
-    if (!deps.freeMemoryPct || q.maxGames <= BIG_BATCH) return null;
-    const free = deps.freeMemoryPct();
-    if (free === null) return 'Could not read free memory (memory_pressure), so the analysis was not started.';
-    if (free < MIN_FREE_MEMORY_PCT) {
-      return `Only ${free}% of memory is free (${MIN_FREE_MEMORY_PCT}% needed to analyse more than ${BIG_BATCH} games). Close some apps and try again.`;
-    }
-    return null;
+  /** One start at a time, so game lists are fetched from Chess.com one request after another. */
+  let startChain: Promise<unknown> = Promise.resolve();
+  function startInTurn(q: Query): Promise<Started> {
+    const p = startChain.then(() => deps.runner.start(q));
+    startChain = p.catch(() => undefined);
+    return p;
   }
 
-  /** The tracked start for a query; a new one when none exists or `fresh` is set. A string is a refusal. */
-  function track(q: Query, fresh: boolean): Tracked | string {
+  /** The tracked start for a query; a new one when none exists or `fresh` is set. */
+  function track(q: Query, fresh: boolean): Tracked {
     const key = keyOf(q);
     const existing = tracked.get(key);
     if (existing && !fresh) return existing;
-    const refusal = memoryRefusal(q);
-    if (refusal) return refusal;
-    const t: Tracked = { q, started: deps.runner.start(q) };
+    const t: Tracked = { q, started: startInTurn(q) };
     t.started.then(
       (r) => (t.result = r),
       (e) => (t.error = msg(e)),
@@ -356,20 +476,24 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
     return t;
   }
 
+  function forget(ts: Tracked[]): void {
+    for (const t of ts) if (tracked.get(keyOf(t.q)) === t) tracked.delete(keyOf(t.q));
+  }
+
   registerAppTool(
     server,
     'coach_explain_position',
     {
       title: 'Show a position on the board',
       description:
-        'Shows one move from an analysed game on a chess board: the move played (red arrow), Stockfish\'s best move ' +
-        '(green arrow) and best line, the opponent\'s strongest reply, and the win chance before and after. ' +
-        `Stockfish re-checks the position deeply (${DISPLAY_CFG.movetimeMs / 1000} s per position) first, so this takes a few seconds. ` +
+        "Shows one of the player's own moves from an analysed game on a chess board: the move played (red arrow), " +
+        "Stockfish's best move (green arrow) and best line, the opponent's strongest reply, and the win chance before " +
+        'and after. Stockfish first re-checks the position with a deeper search, so this takes a few seconds. ' +
         'Use a gameId and ply from coach_diagnosis. Call this before naming the best move in any position. ' +
         NO_INVENTED_FACTS,
       inputSchema: {
         gameId: z.string().min(1).describe('Game id from coach_diagnosis (the Chess.com game URL)'),
-        ply: z.number().int().min(0).describe('0-based ply from coach_diagnosis (0 is White\'s first move)'),
+        ply: z.number().int().min(0).describe("0-based ply from coach_diagnosis (0 is White's first move); must be the player's own move"),
       },
       _meta: { ui: { resourceUri: BOARD_URI } },
     },
@@ -378,13 +502,30 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
       if (!c) {
         return failure(`Game ${gameId} is not analysed yet, so there is nothing to show. Run coach_diagnosis first and use one of its gameIds.`);
       }
+      const plies = c.analysis.plies;
+      const p = plies[ply];
+      if (!p) return failure(`Game ${gameId} has plies 0 to ${plies.length - 1}; ply ${ply} is not one of them.`);
+      if (p.color !== c.game.myColor) {
+        const own = [ply - 1, ply + 1].filter((x) => x >= 0 && x < plies.length);
+        return failure(
+          `Ply ${ply} (${moveLabel(Math.floor(ply / 2) + 1, p.color, p.moveSan)}) is your opponent's move, not yours. ` +
+            `The board shows your own moves only (you were ${capitalize(c.game.myColor)} in this game)` +
+            `${own.length ? `: try ply ${own.join(' or ')}` : ''}.`,
+        );
+      }
       let facts: PositionFacts;
       try {
-        facts = await deepPositionFacts(c, ply, guardedEngine(deps.display, searchTimeoutMs));
+        const engine = deps.display.get();
+        facts = await deepPositionFacts(
+          c,
+          ply,
+          guardDisplayEngine(engine, searchTimeoutMs, () => deps.display.reset(engine)),
+        );
       } catch (e) {
         return failure(`Could not check this position: ${msg(e)}`);
       }
-      return reply(explainText(facts), { ...toAnswerView(facts) });
+      const disagrees = deepDisagrees(p.classification, facts.classification);
+      return reply(explainText(facts, disagrees), { ...toAnswerView(facts), deepDisagrees: disagrees });
     },
   );
 
@@ -395,36 +536,49 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
       description:
         "Fetches the player's recent rated Chess.com games and starts analysing the ones not analysed yet, in the background " +
         `(Stockfish, ${ENGINE_CFG.movetimeMs} ms per position). Returns at once with how many games there are. ` +
-        'Also refreshes the game list. Then call coach_diagnosis.',
-      inputSchema: { usernames: usernamesSchema, timeClass: timeClassSchema, maxGames: maxGamesSchema },
+        'Also refreshes the game lists. Then call coach_diagnosis with the same arguments.',
+      inputSchema: { usernames: usernamesSchema, accounts: accountsSchema, timeClass: timeClassSchema, maxGames: maxGamesSchema },
     },
     async (args) => {
-      const q = toQuery(args);
-      const t = track(q, true);
-      if (typeof t === 'string') return failure(t);
-      let r: { value: Started } | null;
+      const qs = toQueries(args);
+      if (typeof qs === 'string') return failure(qs);
+      const ts = qs.map((q) => track(q, true));
+      let r: { value: Started[] } | null;
       try {
-        r = await within(t.started, startWaitMs);
+        r = await within(Promise.all(ts.map((t) => t.started)), startWaitMs);
       } catch (e) {
-        tracked.delete(keyOf(q));
+        forget(ts);
         return failure(`Could not get the game list from Chess.com: ${msg(e)}`);
       }
       if (!r) {
-        return reply('Still getting the game list from Chess.com; the analysis starts on its own after that. Call coach_diagnosis in a minute.', {
-          state: 'fetching',
-        });
+        return reply(
+          'Still getting the game lists from Chess.com; any games not analysed yet will be analysed after that. Call coach_diagnosis in a minute.',
+          { state: 'fetching' },
+        );
       }
-      const { jobId, total, cached } = r.value;
-      const st = deps.runner.status(jobId);
-      const games = plural(total, `${q.timeClass} game`);
-      const text =
-        total === 0
-          ? `No rated ${q.timeClass} games found for ${q.usernames.join(', ')}.`
-          : cached === total
-            ? `Found ${games} for ${q.usernames.join(', ')}; all are analysed already. Call coach_diagnosis.`
-            : `Found ${games} for ${q.usernames.join(', ')}: ${cached} analysed already, analysing the other ${total - cached} ` +
-              'in the background. Call coach_diagnosis to see progress or the result.';
-      return reply(text, { jobId, total, cached, done: st.done, state: st.state });
+      const accounts = r.value.map((s, i) => ({ usernames: qs[i].usernames, jobId: s.jobId, total: s.total, cached: s.cached }));
+      const statuses = accounts.map((a) => deps.runner.status(a.jobId));
+      const total = accounts.reduce((n, a) => n + a.total, 0);
+      const cached = accounts.reduce((n, a) => n + a.cached, 0);
+      const done = statuses.reduce((n, st) => n + st.done, 0);
+      const state = statuses.some((st) => st.state === 'error') ? 'error' : statuses.some((st) => st.state === 'running') ? 'running' : 'done';
+      const tc = qs[0].timeClass;
+      const names = accounts.map((a) => a.usernames.join(', ')).join(', ');
+      let text: string;
+      if (total === 0) {
+        text = `No rated ${tc} games found for ${names}.`;
+      } else {
+        text =
+          accounts.length === 1
+            ? `Found ${plural(total, `${tc} game`)} for ${names}: ${cached} analysed already.`
+            : `Found ${plural(total, `${tc} game`)} in all: ` +
+              `${accounts.map((a) => `${a.usernames.join(', ')} ${a.total} (${a.cached} analysed already)`).join('; ')}.`;
+        text +=
+          cached === total
+            ? ' All are analysed. Call coach_diagnosis.'
+            : ` Analysing the other ${total - cached} in the background. Call coach_diagnosis to see progress or the result.`;
+      }
+      return reply(text, { jobIds: accounts.map((a) => a.jobId), total, cached, done, state, accounts });
     },
   );
 
@@ -434,46 +588,80 @@ export function registerCoachTools(server: McpServer, deps: CoachDeps): void {
       title: 'Diagnose weak spots',
       description:
         "Compares the player's serious-mistake rate (mistakes + blunders) in six areas with players at their rating " +
-        '(their opponents in the same games), from analysed games, and picks one focus. Answers within 2 seconds: ' +
-        'while games are still being analysed it says how many are done; call it again later. The table says ' +
-        "'not enough data' where that is true: say so plainly. Example positions are given by gameId and ply only: " +
-        'show them with coach_explain_position before naming any best move. ' +
+        '(their opponents in the same games), from analysed games, and picks one focus. While games are still being ' +
+        'fetched or analysed it answers within 2 seconds with how far it got; call it again later. The table says ' +
+        "'not enough data' where that is true: say so plainly. Positions are given by gameId and ply only, and " +
+        'repeated positions carry approximate losses from a quick check: show a position with coach_explain_position ' +
+        'before naming any best move or exact number for it. ' +
         NO_INVENTED_FACTS,
-      inputSchema: { usernames: usernamesSchema, timeClass: timeClassSchema, maxGames: maxGamesSchema, asOf: asOfSchema },
+      inputSchema: {
+        usernames: usernamesSchema,
+        accounts: accountsSchema,
+        timeClass: timeClassSchema,
+        maxGames: maxGamesSchema,
+        asOf: asOfSchema,
+      },
     },
     async (args) => {
-      const q = toQuery(args);
-      const t = track(q, false);
-      if (typeof t === 'string') return failure(t);
-      if (t.error) {
-        tracked.delete(keyOf(q));
-        return failure(`Could not get the game list from Chess.com: ${t.error}. Call again to retry.`);
+      const qs = toQueries(args);
+      if (typeof qs === 'string') return failure(qs);
+      const ts = qs.map((q) => track(q, false));
+      const broken = ts.find((t) => t.error !== undefined);
+      if (broken) {
+        forget(ts);
+        return failure(`Could not get the game list from Chess.com: ${broken.error}. Call again to retry.`);
       }
-      let r: { value: Started } | null;
+      let r: { value: Started[] } | null;
       try {
-        r = await within(t.started, listWaitMs);
+        r = await within(Promise.all(ts.map((t) => t.started)), listWaitMs);
       } catch (e) {
-        tracked.delete(keyOf(q));
+        forget(ts);
         return failure(`Could not get the game list from Chess.com: ${msg(e)}. Call again to retry.`);
       }
-      if (!r) {
-        return reply('Fetching the game list from Chess.com; nothing is analysed yet. Ask again in a moment.', { state: 'fetching' });
+      if (!r) return reply('Getting the game lists from Chess.com. Ask again in a moment.', { state: 'fetching' });
+
+      const jobIds = r.value.map((s) => s.jobId);
+      const statuses: JobStatus[] = jobIds.map((id) => deps.runner.status(id));
+      const failed = statuses.find((st) => st.state === 'error');
+      if (failed) {
+        forget(ts);
+        return failure(`The analysis stopped: ${failed.error}. Call coach_start_analysis to try again.`);
       }
-      const { jobId } = r.value;
-      const st = deps.runner.status(jobId);
-      if (st.state === 'running') {
-        return reply(progressText(st), { state: 'running', jobId, done: st.done, total: st.total, skipped: st.skipped ?? 0 });
+      const sum = (f: (st: JobStatus) => number) => statuses.reduce((n, st) => n + f(st), 0);
+      const skipped = sum((st) => st.skipped ?? 0);
+      if (statuses.some((st) => st.state === 'running')) {
+        const done = sum((st) => st.done);
+        const total = sum((st) => st.total);
+        return reply(progressText(done, total, skipped), { state: 'running', jobIds, done, total, skipped });
       }
-      if (st.state === 'error') {
-        tracked.delete(keyOf(q));
-        return failure(`The analysis stopped: ${st.error}. Call coach_start_analysis to try again.`);
+
+      // Reading the cache is fast; the diagnosis itself is not (about 1.7 s for 900 games), so the
+      // result is kept per query set and exact set of cached games, and recomputed when either changes.
+      const games = uniqueGames(await Promise.all(qs.map((q) => deps.runner.load(q))));
+      const memoKey = createHash('sha256')
+        .update(JSON.stringify([qs.map(keyOf), games.map((c) => c.game.id).sort()]))
+        .digest('hex');
+      let found = memo.get(memoKey);
+      if (!found) {
+        const usernames = qs.flatMap((q) => q.usernames);
+        const d = diagnoseFn(games, usernames);
+        const examples = examplePositions(d, games, EXAMPLES).map(toRef);
+        const byAccount =
+          qs.length > 1
+            ? qs.map((q) => {
+                const names = new Set(q.usernames.map((u) => u.toLowerCase()));
+                const n = games.filter((c) => names.has(c.game.username.toLowerCase()) && gamePlies(c) !== null).length;
+                return { username: q.usernames.join(', '), games: n };
+              })
+            : [];
+        const view = diagnosisView(d, examples, repeatedRefs(d, games), byAccount);
+        found = { view, text: diagnosisText(view) };
+        memo.set(memoKey, found);
+        if (memo.size > MEMO_SIZE) memo.delete(memo.keys().next().value as string);
       }
-      const games = await deps.runner.load(q);
-      const d = diagnose(games, q.usernames);
-      const examples = examplePositions(d, games, EXAMPLES).map(toRef);
-      let text = diagnosisText(d, examples);
-      if (st.skipped) text += `\n\n${plural(st.skipped, 'game')} could not be read and ${st.skipped === 1 ? 'was' : 'were'} left out.`;
-      return reply(text, { ...d, examples });
+      let text = found.text;
+      if (skipped) text += `\n\n${plural(skipped, 'game')} could not be read and ${skipped === 1 ? 'was' : 'were'} left out.`;
+      return reply(text, { ...found.view });
     },
   );
 
