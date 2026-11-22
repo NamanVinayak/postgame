@@ -1194,6 +1194,116 @@ describe('keep the win', () => {
   });
 });
 
+describe('coach_examples', () => {
+  type Page = { kind: string; total: number; offset: number; limit: number; examples: { gameId: string; slipPly: number; slipMoveNo: number; playedSan: string }[] };
+
+  it('is registered for both the model and the widget, on the board resource', async () => {
+    const client = await connect(deps(createRunner(NO_ENGINE, source([]))));
+    const { tools } = await client.listTools();
+    const ui = (tools.find((t) => t.name === 'coach_examples')?._meta as { ui?: { resourceUri?: string; visibility?: string[] } } | undefined)?.ui;
+    expect(ui).toEqual({ resourceUri: BOARD_URI, visibility: ['model', 'app'] });
+  });
+
+  it('examplesCarryNoBestMove', async () => {
+    const kw = keepTheWinGames(3);
+    const runner = createRunner(NO_ENGINE, source(kw.games.map((c) => c.game)));
+    const engine = keyedEngine(kw.evals);
+    const client = await connect(deps(runner, engine));
+    const res = await call(client, 'coach_examples', { ...ALICE, source: 'thrownWins' });
+    expect(res.isError).toBeFalsy();
+    const page = res.structuredContent as unknown as Page;
+    expect(page).toMatchObject({ kind: 'examples', total: 3, offset: 0, limit: 10, numbersLabel: 'quick check', title: 'Games you were winning and lost' });
+    // Listing never deep-checks anything.
+    expect(engine.searched).toEqual([]);
+    const text = textOf(res);
+    // "Move 6 (…): 85% → 55% (quick check)" lines, with date, opponent rating and result.
+    expect(text).toMatch(/Move 6 \(.+\): 85% → 55% \(quick check\)/);
+    expect(text).toContain('2023-11-14, vs 1500, lost');
+    expect(text).toContain(`gameId ${kw.games[2].game.id}, ply ${KW_PLY}`);
+    // Neither channel carries a best move (field, cached quick move or deep move) or the opponent's name.
+    const json = JSON.stringify(res.structuredContent);
+    expect(json).not.toMatch(/"best|bestLine|"bob"/);
+    expect(text).not.toContain('bob');
+    for (const { san, uci } of kw.best) {
+      expect(json).not.toContain(`"${san}"`);
+      expect(json).not.toContain(uci);
+      expect(text).not.toMatch(new RegExp(`\\b${san.replace(/[+#]/g, '')}\\b`));
+      expect(text).not.toContain(uci);
+    }
+    // At most 10 a page; an unknown quick fix key is a plain error.
+    expect((await call(client, 'coach_examples', { ...ALICE, source: 'thrownWins', limit: 50 })).structuredContent?.limit).toBe(10);
+    const bad = await call(client, 'coach_examples', { ...ALICE, source: 'quickFix', key: 'nope' });
+    expect(bad.isError).toBe(true);
+    expect(textOf(bad)).toMatch(/No position you keep reaching has that key/);
+    await runner.close();
+  });
+
+  it('askPositionAcceptsExampleRef', async () => {
+    const kw = keepTheWinGames(1);
+    const runner = createRunner(NO_ENGINE, source(kw.games.map((c) => c.game)));
+    const client = await connect(deps(runner, keyedEngine(kw.evals)));
+    const row = ((await call(client, 'coach_examples', { ...ALICE, source: 'thrownWins' })).structuredContent as unknown as Page).examples[0];
+    expect(row.slipPly).toBe(KW_PLY);
+    const res = await call(client, 'coach_ask_position', { gameId: row.gameId, ply: row.slipPly });
+    expect(res.isError).toBeFalsy();
+    // Winning at depth before the move: the keep-the-win prompt.
+    expect(res.structuredContent).toMatchObject({ kind: 'question', gameId: row.gameId, ply: KW_PLY, prompt: "You're winning here. Find the move that keeps it." });
+    for (const bit of [kw.best[0].uci, '%']) expect(textOf(res)).not.toContain(bit);
+    // Not the player's move: a clear error.
+    const theirs = await call(client, 'coach_ask_position', { gameId: row.gameId, ply: row.slipPly + 1 });
+    expect(theirs.isError).toBe(true);
+    expect(textOf(theirs)).toMatch(/opponent's move, not yours/);
+    await runner.close();
+  });
+
+  it('askExampleThatFailsDeepCheckReturnsStatus', async () => {
+    // The quick check called the move a blunder; at depth it is the best move.
+    const kw = keepTheWinGames(1, { heldUp: true });
+    const runner = createRunner(NO_ENGINE, source(kw.games.map((c) => c.game)));
+    const client = await connect(deps(runner, keyedEngine(kw.evals)));
+    const row = ((await call(client, 'coach_examples', { ...ALICE, source: 'thrownWins' })).structuredContent as unknown as Page).examples[0];
+    const res = await call(client, 'coach_ask_position', { gameId: row.gameId, ply: row.slipPly });
+    expect(res.isError).toBeFalsy();
+    expect(res.structuredContent).toEqual({
+      kind: 'status',
+      title: 'Your move held up',
+      message: 'On a deeper look your move here was fine. Pick another example.',
+    });
+    expect(textOf(res)).not.toContain(row.playedSan);
+    await runner.close();
+  });
+
+  it('reportCarriesDrillRefs', async () => {
+    const { games, engine } = repeatedFixture();
+    const runner = createRunner(NO_ENGINE, source(games.map((c) => c.game)));
+    const client = await connect(deps(runner, engine));
+    const args = { accounts: [{ username: 'alice', maxGames: 300 }], timeClass: 'blitz' };
+    const view = (await call(client, 'coach_report', args)).structuredContent as unknown as ReportView;
+    expect(view.query).toEqual({ timeClass: 'blitz', accounts: [{ username: 'alice', maxGames: 300 }] });
+    expect(view.hero.source).toBe('opening');
+    expect(view.leaks.map((l) => l.key)).toHaveLength(6);
+    expect(view.quickFixes?.[0].key).toBe(positionKey(REP_FEN));
+    expect(parseCoachView(JSON.parse(JSON.stringify(view)))).toEqual(view);
+    // coach_examples takes every ref the card carries, with the card's own query.
+    const refs = [
+      { source: view.hero.source },
+      ...view.leaks.map((l) => ({ source: l.key })),
+      ...(view.quickFixes ?? []).map((q) => ({ source: 'quickFix', key: q.key })),
+    ];
+    for (const ref of refs) {
+      const r = await call(client, 'coach_examples', { ...view.query, ...ref });
+      expect(r.isError, JSON.stringify(ref)).toBeFalsy();
+      expect(r.structuredContent).toMatchObject({ kind: 'examples', source: ref.source });
+    }
+    const quick = await call(client, 'coach_examples', { ...view.query, source: 'quickFix', key: view.quickFixes?.[0].key });
+    expect((quick.structuredContent as unknown as Page).examples.map((e) => [e.slipPly, e.playedSan])).toEqual([[4, 'Na3'], [4, 'Bc4'], [4, 'Bc4']]);
+    // The usernames form is echoed too (with its game count).
+    const v2 = (await call(client, 'coach_report', ALICE)).structuredContent as unknown as ReportView;
+    expect(v2.query).toEqual({ timeClass: 'blitz', usernames: ['alice'], maxGames: 300 });
+    await runner.close();
+  });
+});
+
 describe('student memory tools', () => {
   it('coach_note_thinking and coach_student: this session is kept apart from "last time"', async () => {
     writeCached(cachedItalian());
