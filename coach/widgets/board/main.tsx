@@ -3,13 +3,19 @@ import { createRoot } from 'react-dom/client';
 // Pure module (no node imports): the same checker the tests cover.
 import { parseCoachView, type CoachView } from '../../src/server/views';
 import { AnswerBoard } from './AnswerBoard';
+import { pickQuery, type ExamplesQuery } from './drill';
+import { ExamplesCard } from './ExamplesPanel';
 import { QuestionBoard } from './QuestionBoard';
 import { ReportCard, type Display } from './ReportCard';
 import { StatusCard } from './StatusCard';
 import { errorText, resultText } from './shared';
 import './widget.css';
 
-type Status = { kind: 'waiting' } | { kind: 'error'; message: string } | { kind: 'ready'; view: CoachView };
+type Status =
+  | { kind: 'waiting' }
+  | { kind: 'error'; message: string }
+  // `query`: the games the tool call was about (its arguments), so an examples page can load more.
+  | { kind: 'ready'; view: CoachView; query?: ExamplesQuery };
 
 interface WidgetProps {
   app: App;
@@ -19,8 +25,8 @@ interface WidgetProps {
 }
 
 function Widget({ app, status, display, onDisplayMode }: WidgetProps) {
-  // The report and the status card paint their own card, edge to edge.
-  const card = status.kind === 'ready' && (status.view.kind === 'report' || status.view.kind === 'status');
+  // The report, the status card and an examples page paint their own card, edge to edge.
+  const card = status.kind === 'ready' && (status.view.kind === 'report' || status.view.kind === 'status' || status.view.kind === 'examples');
   return (
     <div className={card ? 'pg-wrap pg-wrap--report' : 'pg-wrap'}>
       {status.kind === 'waiting' && <p className="pg-p pg-muted">Waiting for the coach…</p>}
@@ -31,6 +37,7 @@ function Widget({ app, status, display, onDisplayMode }: WidgetProps) {
         <ReportCard app={app} view={status.view} display={display} onDisplayMode={onDisplayMode} />
       )}
       {status.kind === 'ready' && status.view.kind === 'status' && <StatusCard view={status.view} />}
+      {status.kind === 'ready' && status.view.kind === 'examples' && <ExamplesCard app={app} view={status.view} query={status.query} />}
     </div>
   );
 }
@@ -68,14 +75,21 @@ function applyHostContext(ctx: Partial<McpUiHostContext> | undefined) {
 // Render something visible first so the frame never has zero height.
 show({ kind: 'waiting' });
 
-// Handlers go on before connect() so the first tool result is not missed.
+// The arguments of the tool call this frame shows (the host sends them before the result). An
+// examples page the model asked for passes them back to coach_examples for "More".
+let toolArgs: Record<string, unknown> | undefined;
+
+// Handlers go on before connect() so the first tool input and result are not missed.
+app.ontoolinput = (params) => {
+  toolArgs = params.arguments;
+};
 app.ontoolresult = (result) => {
   if (result.isError) {
     show({ kind: 'error', message: resultText(result.content) || 'the tool reported an error' });
     return;
   }
   const view = parseCoachView(result.structuredContent);
-  show(view ? { kind: 'ready', view } : { kind: 'error', message: 'the tool result has nothing to show' });
+  show(view ? { kind: 'ready', view, query: pickQuery(toolArgs) } : { kind: 'error', message: 'the tool result has nothing to show' });
 };
 app.onhostcontextchanged = applyHostContext;
 
