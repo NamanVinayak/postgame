@@ -2,8 +2,8 @@ import type { StatusView } from '../../src/server/views';
 import './report.css';
 
 /**
- * A calm waiting card while the coach works, in the report card's look (dark by default, light
- * for light hosts). With progress that can be counted, it shows a bar with "312 of 900" and the
+ * A calm waiting card while the coach works, in the report card's paper look (the same in
+ * light and dark hosts). With progress that can be counted, it shows a bar with "312 of 900" and the
  * percentage. Without (or with a total of 0), a softly breathing dot stands in for the bar.
  */
 export function StatusCard({ view }: { view: StatusView }) {
@@ -11,7 +11,6 @@ export function StatusCard({ view }: { view: StatusView }) {
   const share = p ? Math.min(1, p.done / p.total) : 0;
   return (
     <article className="rc rc--status" role="status" aria-live="polite">
-      <div className="rc-sheen" aria-hidden="true" />
       <div className="rc-topline">
         <span className="rc-eyebrow">Postgame Coach</span>
       </div>

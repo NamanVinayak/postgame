@@ -13,14 +13,17 @@ export interface Display {
   available: DisplayMode[];
 }
 
-const WRONG_ARROW = 'rgba(244, 63, 94, 0.92)';
-const BEST_ARROW = 'rgba(34, 197, 94, 0.95)';
-const WRONG_SQUARE = 'radial-gradient(circle, rgba(244, 63, 94, 0.55) 0 58%, rgba(244, 63, 94, 0.3) 60%)';
-const BEST_SQUARE = 'radial-gradient(circle, rgba(34, 197, 94, 0.55) 0 58%, rgba(34, 197, 94, 0.3) 60%)';
+// The paper look's red and green, as board arrows and square tints.
+const WRONG_ARROW = 'rgba(180, 46, 36, 0.9)';
+const BEST_ARROW = 'rgba(27, 110, 62, 0.92)';
+const WRONG_SQUARE = 'radial-gradient(circle, rgba(180, 46, 36, 0.5) 0 58%, rgba(180, 46, 36, 0.28) 60%)';
+const BEST_SQUARE = 'radial-gradient(circle, rgba(27, 110, 62, 0.5) 0 58%, rgba(27, 110, 62, 0.28) 60%)';
 // Small boards need thicker arrows to read.
 const MINI_ARROWS = { ...defaultArrowOptions, arrowWidthDenominator: 4 };
 
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+/** What "costly move" means, in one plain line under the bars (a mistake or blunder in the analysis). */
+const COSTLY_MOVE = 'Costly move = a move that drops your winning chances by 10% or more (for example from 60% to 48%).';
 const toMoveText = (fen: string) => (fen.split(' ')[1] === 'w' ? 'White to move' : 'Black to move');
 const orList = (moves: string[]) =>
   moves.map((san, i) => (
@@ -77,12 +80,17 @@ function barScale(leaks: ReportLeak[]): number {
   return Math.min(100, Math.ceil(top / 10) * 10);
 }
 
-/** One ranked bar: the share as a solid bar, the likely range as a soft band around it, one plain line under it. */
-function LeakBar({ leak, max }: { leak: ReportLeak; max: number }) {
+/**
+ * One ranked bar: the share as a solid bar, the likely range as a soft band around it (only when
+ * the ranges can be trusted), and one plain line under it.
+ */
+function LeakBar({ leak, max, showRange }: { leak: ReportLeak; max: number; showRange: boolean }) {
   const at = (v: number) => `${(Math.min(max, Math.max(0, v)) / max) * 100}%`;
   const [lo, hi] = leak.range;
   const label =
-    `${leak.label}: ${leak.sharePct}% of the win chance you gave away (likely ${lo} to ${hi}%)` + (leak.detail ? `. ${capitalize(leak.detail)}.` : '.');
+    `${leak.label}: ${leak.sharePct}% of the winning chances you gave away` +
+    (showRange ? ` (likely ${lo} to ${hi}%)` : '') +
+    (leak.detail ? `. ${capitalize(leak.detail)}.` : '.');
   return (
     <li className="rc-leak">
       <div className="rc-leakHead">
@@ -90,7 +98,7 @@ function LeakBar({ leak, max }: { leak: ReportLeak; max: number }) {
         <span className="rc-leakPct">{leak.sharePct}%</span>
       </div>
       <div className="rc-leakTrack" role="img" aria-label={label}>
-        <div className="rc-leakRange" style={{ left: at(lo), width: `calc(${at(hi)} - ${at(lo)})` }} />
+        {showRange && <div className="rc-leakRange" style={{ left: at(lo), width: `calc(${at(hi)} - ${at(lo)})` }} />}
         <div className="rc-leakFill" style={{ width: at(leak.sharePct) }} />
       </div>
       {leak.detail && <div className="rc-leakDetail">{capitalize(leak.detail)}</div>}
@@ -100,6 +108,7 @@ function LeakBar({ leak, max }: { leak: ReportLeak; max: number }) {
 
 function QuickFixCard({ q, index }: { q: QuickFix; index: number }) {
   const shown = q.revealed && q.bestSan !== null && q.bestUci !== null;
+  const missing = q.revealed && !shown; // tried, but there is no answer to show
   const arrows = [shown ? arrowFor(q.bestUci, BEST_ARROW) : null, arrowFor(q.wrongUci, WRONG_ARROW)].filter((a): a is Arrow => a !== null);
   const squareStyles: Record<string, CSSProperties> = {};
   if (shown && q.bestUci) squareStyles[q.bestUci.slice(2, 4)] = { background: BEST_SQUARE };
@@ -117,6 +126,8 @@ function QuickFixCard({ q, index }: { q: QuickFix; index: number }) {
           <div className="rc-fixAnswer">
             Fix: play <span className="rc-best">{q.bestSan}</span> here
           </div>
+        ) : missing ? (
+          <div className="rc-fixHidden">Answer not available</div>
         ) : (
           <div className="rc-fixHidden">
             <svg width="11" height="12" viewBox="0 0 11 12" aria-hidden="true">
@@ -134,11 +145,12 @@ function QuickFixCard({ q, index }: { q: QuickFix; index: number }) {
 type Sent = 'idle' | 'sending' | 'sent' | 'failed';
 
 /**
- * The report card v4, "Where your points go" (spec §6c): a dark header with the game count, the
- * hero sentence, ranked bars of where the points go (each with a soft likely range and one plain
- * line), one muted context line, this week's lesson (its boards carry no answers), quick fixes
- * whose answers stay hidden until revealed, and a button that puts "Start this week's training"
- * in the chat box.
+ * The report card (spec §6c), in a bright "paper" look that stays the same in light and dark
+ * hosts: a kicker line with the game count, the hero sentence in a big serif, ranked bars of
+ * where the lost winning chances go (each with a soft likely range when the ranges can be
+ * trusted, and one plain line in costly moves), one muted context line, this week's lesson (its
+ * boards carry no answers), quick fixes whose answers stay hidden until revealed, and a button
+ * that puts "Start this week's training" in the chat box.
  *
  * Inline it is one column; "Expand" asks the host for fullscreen (shown only when the host
  * offers it), where the bars sit on the left and the lesson on the right. Parts with nothing in
@@ -166,6 +178,7 @@ export function ReportCard({
   const onePrompt = prompts.length === 1 ? prompts[0] : null;
   const max = barScale(view.leaks);
   const share = focus.drillsTotal > 0 ? Math.min(1, focus.drillsDone / focus.drillsTotal) : 0;
+  const showRange = view.rangesReliable !== false;
 
   const switchTo = async (mode: DisplayMode) => {
     try {
@@ -188,10 +201,12 @@ export function ReportCard({
 
   return (
     <article className="rc" data-mode={full ? 'fullscreen' : 'inline'}>
-      <div className="rc-sheen" aria-hidden="true" />
       <header className="rc-head">
         <div className="rc-topline">
-          <span className="rc-eyebrow">Postgame Coach · Report card</span>
+          <span className="rc-eyebrow">Postgame Coach</span>
+          <span className="rc-meta">
+            {capitalize(view.timeClass)} · {view.games} game{view.games === 1 ? '' : 's'}
+          </span>
           {canExpand && (
             <button type="button" className="rc-ghost" onClick={() => void switchTo('fullscreen')}>
               <span aria-hidden="true">⤢</span> Expand
@@ -203,36 +218,34 @@ export function ReportCard({
             </button>
           )}
         </div>
-        <div className="rc-heroRow">
-          <div className="rc-hero">
-            <h2 className="rc-heroLine">{view.hero.headline}</h2>
-            {view.hero.sub && <p className="rc-heroSub">{view.hero.sub}</p>}
-          </div>
-          <div className="rc-meta">
-            <div className="rc-metaBig">{view.games}</div>
-            <div className="rc-metaSmall">
-              {capitalize(view.timeClass)} game{view.games === 1 ? '' : 's'}
-            </div>
-          </div>
-        </div>
+        <h2 className="rc-hero">
+          <span className="rc-heroLine">{view.hero.headline}</span>
+          {view.hero.sub && <em className="rc-heroSub">{view.hero.sub}</em>}
+        </h2>
       </header>
 
       <div className="rc-body">
         {(view.leaks.length > 0 || view.context) && (
           <section className="rc-left">
             {view.leaks.length > 0 && (
-              <section className="rc-leaks" aria-label="Where your points go">
-                <div className="rc-secHead">
-                  <h3>Where your points go</h3>
-                  <span className="rc-secNote">
-                    Share of the win chance you gave away · <i className="rc-kRange" aria-hidden="true" /> likely range
-                  </span>
-                </div>
+              <section className="rc-leaks" aria-label="Where your lost winning chances go">
+                <h3 className="rc-secTitle">Where your lost winning chances go</h3>
+                <p className="rc-secNote">
+                  Share of all the winning chances you gave away
+                  {showRange && (
+                    <>
+                      {' · '}
+                      <i className="rc-kRange" aria-hidden="true" /> likely range
+                    </>
+                  )}
+                </p>
                 <ol className="rc-leakList">
                   {view.leaks.map((l, i) => (
-                    <LeakBar key={i} leak={l} max={max} />
+                    <LeakBar key={i} leak={l} max={max} showRange={showRange} />
                   ))}
                 </ol>
+                <p className="rc-costly">{COSTLY_MOVE}</p>
+                {!showRange && <p className="rc-costly">Too few games to show how sure these numbers are.</p>}
               </section>
             )}
             {view.context && <p className="rc-context">{view.context}</p>}
@@ -279,10 +292,8 @@ export function ReportCard({
 
           {fixes.length > 0 && (
             <section className="rc-fixes" aria-label="Quick fixes">
-              <div className="rc-secHead">
-                <h3>Quick fixes</h3>
-                <span className="rc-secNote">Positions you keep reaching</span>
-              </div>
+              <h3 className="rc-secTitle">Quick fixes</h3>
+              <p className="rc-secNote">Positions you keep reaching</p>
               <div className="rc-fixList">
                 {fixes.map((q, i) => (
                   <QuickFixCard key={i} q={q} index={i} />

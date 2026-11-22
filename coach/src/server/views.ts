@@ -142,6 +142,8 @@ export interface ReportView {
   focus: ReportFocus;
   /** At most MAX_QUICK_FIXES. */
   quickFixes?: QuickFix[];
+  /** False when there are too few games to say how sure the shares are: the bars then show no ranges. */
+  rangesReliable?: boolean;
   /** The training button's label; the widget defaults to DEFAULT_REPORT_CTA. */
   cta?: string;
 }
@@ -212,6 +214,8 @@ export interface LeakReportLike {
   timeLosses: { losses: number; onTime: number; sharePct: number };
   whatIf: { ratingPoints: number } | null;
   focus: { kind: 'keepTheWin' } | { kind: 'clock' } | { kind: 'leak'; key: string };
+  /** False when the shares' ranges can't be trusted (too few games); passed to the card as is. */
+  rangesReliable?: boolean;
 }
 
 /** A lesson board as the server knows it. Any extra fields (answers) are dropped by the mapper. */
@@ -256,6 +260,8 @@ const MAX_LINE_TEXT = 200;
 const MAX_LABEL_TEXT = 80;
 const MAX_DETAIL_TEXT = 120;
 const MAX_CONTEXT_TEXT = 300;
+const MAX_TIMES_TEXT = 60;
+const MAX_TIME_CLASS = 40;
 
 const round1 = (x: number) => Math.round(x * 10) / 10;
 
@@ -437,44 +443,72 @@ export function toReportView(
 const plural = (n: number, word: string, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
 
 /**
+ * "1 in N" from a share in %: N is 100 ÷ the share, rounded, and never below 2 (so a share of
+ * 60–85% reads "1 in 2", which understates rather than overstates). Above 85% it is "almost
+ * all", and a share of zero is "none".
+ */
+function oneInN(sharePct: number): number | 'none' | 'almostAll' {
+  if (!(sharePct > 0)) return 'none';
+  if (sharePct > 85) return 'almostAll';
+  return Math.max(2, Math.round(100 / sharePct));
+}
+
+/**
  * The hero for "Keep the win": "You were winning in 493 games, and lost 142 of them." and
- * "1 in 3 of your losses were games you were winning." (N is 100 ÷ the share, rounded; a share
- * of zero, or one so large that N rounds to 1, gets its own plain sentence).
+ * "1 in 3 of your losses were games you were winning." (see oneInN).
  */
 export function heroFromConversion(c: Pick<LeakReportLike['conversion'], 'winningGames' | 'lost' | 'lostShareOfLossesPct'>): ReportHero {
   const headline = `You were winning in ${plural(c.winningGames, 'game')}, and lost ${c.lost} of them.`;
-  const share = c.lostShareOfLossesPct;
-  let sub: string;
-  if (!(share > 0)) sub = 'None of your losses were games you were winning.';
-  else {
-    const n = Math.round(100 / share);
-    sub = n <= 1 ? 'Almost all of your losses were games you were winning.' : `1 in ${n} of your losses were games you were winning.`;
-  }
-  return { headline, sub };
-}
-
-/** The hero for "the clock": how many losses were on time. */
-export function heroFromTimeLosses(t: LeakReportLike['timeLosses']): ReportHero {
-  const headline = `${t.onTime} of your ${plural(t.losses, 'loss', 'losses')} were on time.`;
-  const n = t.sharePct > 0 ? Math.round(100 / t.sharePct) : 0;
+  const n = oneInN(c.lostShareOfLossesPct);
   const sub =
-    n <= 0 ? 'None of your losses were on time.' : n === 1 ? 'Almost all of your losses were on time.' : `1 in ${n} of your losses came from the clock, not the board.`;
+    n === 'none'
+      ? 'None of your losses were games you were winning.'
+      : n === 'almostAll'
+        ? 'Almost all of your losses were games you were winning.'
+        : `1 in ${n} of your losses were games you were winning.`;
   return { headline, sub };
 }
 
-/** "about 1.8 big mistakes a game" (the first such line) or "about 0.8 a game" (the ones after). */
-function perGame(x: number, first: boolean): string {
-  const v = Math.round(x * 10) / 10;
-  if (v === 0) return first ? 'fewer than 0.1 big mistakes a game' : 'fewer than 0.1 a game';
-  return first ? `about ${v} big mistake${v === 1 ? '' : 's'} a game` : `about ${v} a game`;
+/** "72 of your 448 losses were on time", "1 of your 1 loss was on time". */
+const onTimeText = (t: LeakReportLike['timeLosses']) =>
+  `${t.onTime} of your ${plural(t.losses, 'loss', 'losses')} ${t.onTime === 1 ? 'was' : 'were'} on time`;
+
+/** The hero for "the clock": how many losses were on time (see oneInN). */
+export function heroFromTimeLosses(t: LeakReportLike['timeLosses']): ReportHero {
+  const n = oneInN(t.sharePct);
+  const sub =
+    n === 'none'
+      ? 'None of your losses were on time.'
+      : n === 'almostAll'
+        ? 'Almost all of your losses were on time.'
+        : `1 in ${n} of your losses came from the clock, not the board.`;
+  return { headline: `${onTimeText(t)}.`, sub };
 }
 
-/** The hero for a single situation: where most of the points go. */
-function heroFromLeak(leak: LeakReportLike['leaks'][number] | undefined): ReportHero {
+/**
+ * Costly moves (a mistake or blunder: the win chance drops by 10 points or more) in natural
+ * numbers: "About 2 costly moves per game" (1.5 or more a game, rounded), "About 1 costly move
+ * per game" (0.75 to 1.5), "About 1 costly move every 2 games" (0.3 to 0.75), "About 1 costly
+ * move every 5 games" (under 0.3: every round(1 ÷ x) games).
+ */
+export function costlyMovesText(perGame: number): string {
+  if (!(perGame > 0)) return 'No costly moves here';
+  if (perGame >= 1.5) return `About ${Math.round(perGame)} costly moves per game`;
+  if (perGame >= 0.75) return 'About 1 costly move per game';
+  if (perGame >= 0.3) return 'About 1 costly move every 2 games';
+  return `About 1 costly move every ${Math.round(1 / perGame)} games`;
+}
+
+/**
+ * The hero for a single situation. A share is a leak, not a majority: "Your biggest leak: X."
+ * when it is the top bar, "Your focus this week: X." when it isn't; then its share.
+ */
+function heroFromLeak(leak: LeakReportLike['leaks'][number] | undefined, isTop: boolean): ReportHero {
   if (!leak) return { headline: 'Not enough games yet to say where your points go.', sub: '' };
+  const name = `${leak.label.charAt(0).toLowerCase()}${leak.label.slice(1)}`;
   return {
-    headline: `Most of your points go in one place: ${leak.label.charAt(0).toLowerCase()}${leak.label.slice(1)}.`,
-    sub: `${Math.round(leak.sharePct)}% of all the win chance you give away, ${perGame(leak.bigMistakesPerGame, true)}.`,
+    headline: isTop ? `Your biggest leak: ${name}.` : `Your focus this week: ${name}.`,
+    sub: `${Math.round(leak.sharePct)}% of the win chance you give away happens here.`,
   };
 }
 
@@ -543,15 +577,10 @@ function cleanQuickFix(q: QuickFix): QuickFix {
  */
 function reportV4(r: LeakReportLike, x: ReportV4Extras): ReportView {
   const ranked = [...r.leaks].sort((p, q) => q.sharePct - p.sharePct).slice(0, MAX_REPORT_LEAKS);
-  let firstPerGame = true;
   const leaks: ReportLeak[] = ranked.map((l) => {
     let detail = '';
-    if (l.key === 'clock' && r.timeLosses.losses > 0) {
-      detail = `${r.timeLosses.onTime} of your ${plural(r.timeLosses.losses, 'loss', 'losses')} were on time`;
-    } else if (Number.isFinite(l.bigMistakesPerGame) && l.bigMistakesPerGame >= 0) {
-      detail = perGame(l.bigMistakesPerGame, firstPerGame);
-      firstPerGame = false;
-    }
+    if (l.key === 'clock' && r.timeLosses.losses > 0) detail = onTimeText(r.timeLosses);
+    else if (Number.isFinite(l.bigMistakesPerGame) && l.bigMistakesPerGame >= 0) detail = costlyMovesText(l.bigMistakesPerGame);
     const clamp = (v: number) => Math.min(100, Math.max(0, Math.round(v)));
     const lo = clamp(Math.min(l.shareRange[0], l.shareRange[1]));
     const hi = clamp(Math.max(l.shareRange[0], l.shareRange[1]));
@@ -583,7 +612,7 @@ function reportV4(r: LeakReportLike, x: ReportV4Extras): ReportView {
     prompt = "You're low on time here. Find a good move.";
   } else {
     const leak = r.leaks.find((l) => l.key === f.key);
-    hero = heroFromLeak(leak);
+    hero = heroFromLeak(leak, ranked[0]?.key === f.key);
     title = leak?.label ?? 'This week';
     line = `${many(total)} where a move cost you${leak ? ` (${leak.label.toLowerCase()})` : ''}.`;
     prompt = 'Find the best move here.';
@@ -602,9 +631,13 @@ function reportV4(r: LeakReportLike, x: ReportV4Extras): ReportView {
   if (x.quickFixes !== undefined) {
     view.quickFixes = x.quickFixes.map(cleanQuickFix).filter(isQuickFix).slice(0, MAX_QUICK_FIXES);
   }
+  if (typeof r.rangesReliable === 'boolean') view.rangesReliable = r.rangesReliable;
   if (isCta(x.cta)) view.cta = x.cta;
   return view;
 }
+
+/** Cuts text to `max` characters, ending with "…" when it had to cut. */
+const fit = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, max - 1)}…`);
 
 /**
  * @deprecated A v3 report shown on the v4 card (until P3): the headline and subhead become the
@@ -615,12 +648,13 @@ export function legacyReportToV4(v: LegacyReportView): ReportView {
   const positions = v.positions ?? [];
   const done = positions.reduce((n, p) => n + p.drillsDone, 0);
   const total = positions.reduce((n, p) => n + p.drillsTotal, 0);
-  const title = v.focus ? `${v.focus.charAt(0).toUpperCase()}${v.focus.slice(1)}` : 'No single focus yet';
+  const title = fit(v.focus ? `${v.focus.charAt(0).toUpperCase()}${v.focus.slice(1)}` : 'No single focus yet', MAX_LABEL_TEXT);
+  // Over-long text is cut to fit rather than refusing the whole card.
   const out: ReportView = {
     kind: 'report',
     games: v.games,
-    timeClass: v.timeClass,
-    hero: { headline: v.headline, sub: v.subhead ?? '' },
+    timeClass: fit(v.timeClass, MAX_TIME_CLASS),
+    hero: { headline: fit(v.headline, MAX_HERO_TEXT), sub: fit(v.subhead ?? '', MAX_HERO_TEXT) },
     leaks: [],
     focus: {
       title,
@@ -630,7 +664,12 @@ export function legacyReportToV4(v: LegacyReportView): ReportView {
       drillsTotal: total,
     },
   };
-  if (positions.length > 0) out.quickFixes = positions.slice(0, MAX_QUICK_FIXES).map((p) => quickFixFromPosition(p, false));
+  if (positions.length > 0) {
+    out.quickFixes = positions.slice(0, MAX_QUICK_FIXES).map((p) => {
+      const q = quickFixFromPosition(p, false);
+      return { ...q, label: fit(q.label, MAX_LABEL_TEXT), times: fit(q.times, MAX_TIMES_TEXT) };
+    });
+  }
   if (v.cta !== undefined) out.cta = v.cta;
   return out;
 }
@@ -765,7 +804,7 @@ function isQuickFix(q: unknown): q is QuickFix {
     isFen(q.fen) &&
     isColor(q.orientation) &&
     isText(q.label, MAX_LABEL_TEXT) &&
-    isText(q.times, 60) &&
+    isText(q.times, MAX_TIMES_TEXT) &&
     Array.isArray(q.wrongSan) &&
     q.wrongSan.length >= 1 &&
     q.wrongSan.length <= MAX_WRONG_MOVES &&
@@ -813,7 +852,7 @@ function isReportV4(v: Obj): boolean {
   const hero = v.hero;
   return (
     isCount(v.games) &&
-    isText(v.timeClass, 40) &&
+    isText(v.timeClass, MAX_TIME_CLASS) &&
     isObj(hero) &&
     isText(hero.headline, MAX_HERO_TEXT) &&
     hero.headline.length > 0 &&
@@ -827,8 +866,38 @@ function isReportV4(v: Obj): boolean {
     isFocus(v.focus) &&
     (v.quickFixes === undefined ||
       (Array.isArray(v.quickFixes) && v.quickFixes.length <= MAX_QUICK_FIXES && v.quickFixes.every(isQuickFix))) &&
+    (v.rangesReliable === undefined || typeof v.rangesReliable === 'boolean') &&
     (v.cta === undefined || isCta(v.cta))
   );
+}
+
+/**
+ * A checked v4 report rebuilt from its known fields only, at every level, so unknown keys never
+ * reach the widget. Call only after isReportV4.
+ */
+function cleanReportV4(v: ReportView): ReportView {
+  const f = v.focus;
+  const focus: ReportFocus = {
+    title: f.title,
+    line: f.line,
+    positions: f.positions.map((p) => ({ fen: p.fen, orientation: p.orientation, prompt: p.prompt })),
+    drillsDone: f.drillsDone,
+    drillsTotal: f.drillsTotal,
+  };
+  if (f.estimate !== undefined) focus.estimate = f.estimate;
+  const out: ReportView = {
+    kind: 'report',
+    games: v.games,
+    timeClass: v.timeClass,
+    hero: { headline: v.hero.headline, sub: v.hero.sub },
+    leaks: v.leaks.map((l) => ({ label: l.label, sharePct: l.sharePct, range: [l.range[0], l.range[1]], detail: l.detail })),
+    focus,
+  };
+  if (v.context !== undefined) out.context = v.context;
+  if (v.quickFixes !== undefined) out.quickFixes = v.quickFixes.map(cleanQuickFix);
+  if (v.rangesReliable !== undefined) out.rangesReliable = v.rangesReliable;
+  if (v.cta !== undefined) out.cta = v.cta;
+  return out;
 }
 
 function isStatus(v: Obj): boolean {
@@ -854,19 +923,20 @@ function isLegacyReport(v: Obj): boolean {
 
 /**
  * Checks a tool result's `structuredContent`; returns null unless it is a well-formed CoachView.
- * A v3 report (no `hero`) that checks out is returned as its v4 card (legacyReportToV4).
+ * A report comes back as a clean copy holding only known fields (cleanReportV4); a v3 report
+ * (no `hero`) that checks out comes back as its v4 card (legacyReportToV4).
  */
 export function parseCoachView(x: unknown): CoachView | null {
   if (!isObj(x)) return null;
   if (x.kind === 'report' && !('hero' in x)) {
     if (!isLegacyReport(x)) return null;
     const v4 = legacyReportToV4(x as unknown as LegacyReportView);
-    return isReportV4(v4 as unknown as Obj) ? v4 : null;
+    return isReportV4(v4 as unknown as Obj) ? cleanReportV4(v4) : null;
   }
+  if (x.kind === 'report') return isReportV4(x) ? cleanReportV4(x as unknown as ReportView) : null;
   const ok =
     (x.kind === 'answer' && isAnswer(x)) ||
     (x.kind === 'question' && isQuestion(x)) ||
-    (x.kind === 'report' && isReportV4(x)) ||
     (x.kind === 'status' && isStatus(x));
   return ok ? (x as unknown as CoachView) : null;
 }
