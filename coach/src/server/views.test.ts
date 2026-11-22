@@ -5,6 +5,7 @@ import {
   toAnswerView,
   toQuestionView,
   toReportView,
+  toStatusView,
   type DiagnosisLike,
   type ReportLabel,
   type ReportPosition,
@@ -337,6 +338,60 @@ describe('toReportView with focus positions', () => {
       expect(mapped.cta, JSON.stringify(cta)).toBeUndefined();
       expect(parseCoachView(JSON.parse(JSON.stringify(mapped)))).toEqual(mapped);
     }
+  });
+});
+
+describe('toStatusView', () => {
+  it('statusViewRoundTrips', () => {
+    const withProgress = toStatusView('Analysing your games', 'Checking each move with Stockfish.', { done: 312, total: 900 });
+    expect(withProgress).toEqual({
+      kind: 'status',
+      title: 'Analysing your games',
+      message: 'Checking each move with Stockfish.',
+      progress: { done: 312, total: 900 },
+    });
+    const waiting = toStatusView('Getting your games', 'Downloading your blitz games.');
+    expect(Object.keys(waiting).sort()).toEqual(['kind', 'message', 'title']); // no progress key at all
+    const edges = [toStatusView('t', 'm', { done: 0, total: 0 }), toStatusView('t', 'm', { done: 900, total: 900 }), toStatusView('', '')];
+    for (const view of [withProgress, waiting, ...edges]) {
+      expect(parseCoachView(JSON.parse(JSON.stringify(view)))).toEqual(view);
+    }
+  });
+
+  it('statusViewRejectsBadProgress', () => {
+    const good = toStatusView('t', 'm', { done: 1, total: 2 });
+    expect(parseCoachView(good)).toEqual(good);
+    const bad: unknown[] = [
+      { ...good, progress: { done: 3, total: 2 } }, // more done than there are
+      { ...good, progress: { done: -1, total: 2 } },
+      { ...good, progress: { done: 1.5, total: 2 } },
+      { ...good, progress: { done: 1, total: Number.POSITIVE_INFINITY } },
+      { ...good, progress: { done: Number.NaN, total: 2 } },
+      { ...good, progress: { done: '1', total: 2 } },
+      { ...good, progress: { done: 1 } },
+      { ...good, progress: [1, 2] },
+      { ...good, progress: null },
+      { ...good, title: 'x'.repeat(301) },
+      { ...good, message: 'x'.repeat(301) },
+      { ...good, title: 5 },
+      { kind: 'status', title: 't' }, // no message
+    ];
+    for (const x of bad) expect(parseCoachView(x), JSON.stringify(x).slice(0, 80)).toBeNull();
+
+    // The mapper never emits what the widget would refuse: bad progress is left out (the card
+    // shows a plain waiting state), and over-long text is cut to fit.
+    for (const p of [{ done: 3, total: 2 }, { done: -1, total: 2 }, { done: 1.5, total: 2 }, { done: Number.NaN, total: 2 }]) {
+      const view = toStatusView('t', 'm', p);
+      if (view.kind !== 'status') throw new Error('not a status');
+      expect(view.progress, JSON.stringify(p)).toBeUndefined();
+      expect(parseCoachView(JSON.parse(JSON.stringify(view)))).toEqual(view);
+    }
+    const long = toStatusView('x'.repeat(400), 'y'.repeat(400));
+    if (long.kind !== 'status') throw new Error('not a status');
+    expect(long.title.length).toBeLessThanOrEqual(300);
+    expect(long.message.length).toBeLessThanOrEqual(300);
+    expect(long.message.endsWith('…')).toBe(true);
+    expect(parseCoachView(long)).toEqual(long);
   });
 });
 
