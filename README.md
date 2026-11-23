@@ -128,7 +128,8 @@ covered by unit tests (`npm test`) that run in CI on every push.
 - **Stockfish** — the chess engine, © the Stockfish contributors, licensed
   **GPLv3**. Postgame bundles the prebuilt `stockfish.js` WebAssembly engine
   (via the [`stockfish`](https://www.npmjs.com/package/stockfish) npm package)
-  and communicates with it as a separate Web Worker program.
+  and communicates with it as a separate Web Worker program. See
+  [THIRD_PARTY.md](THIRD_PARTY.md).
 - [chess.js](https://github.com/jhlywa/chess.js) and
   [react-chessboard](https://github.com/Clariity/react-chessboard) for move
   handling and the board.
@@ -168,4 +169,5 @@ use it. True multi-threaded search would additionally require serving the app
 with COOP/COEP headers to enable SharedArrayBuffer.
 
 The application code in this repository is released under the MIT License
-(see `LICENSE`). The bundled Stockfish engine remains under its own GPLv3 license.
+(see [LICENSE](LICENSE)). The bundled Stockfish engine remains under its own GPLv3 license;
+see [THIRD_PARTY.md](THIRD_PARTY.md).
