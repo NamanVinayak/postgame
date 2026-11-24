@@ -9,9 +9,13 @@ import { registerSW } from 'virtual:pwa-register';
  * its old JavaScript. That is how a phone ended up scoring games with a weeks-old build:
  * docs/incidents/2026-11-23-old-app-copy-wrong-accuracy.md.
  *
- * So: check for a new version on start, on every return to the foreground and hourly; when a
- * new worker takes control, reload once into it, but never while something holds the reload
- * (an analysis in progress). Any change here needs the real-browser check in that note.
+ * So: check for a new version on start, on every return to the foreground and hourly. When a
+ * new worker takes control, reload once into it at a safe moment. The app has no routing, so a
+ * reload lands on the game list:
+ *   - never while an analysis runs (`holdReload`), not even in the background;
+ *   - while a review or drill is on screen (`holdReloadWhileVisible`), wait until the app goes
+ *     to the background, where the reload is invisible, or until the user is back on the list.
+ * Any change here needs the real-browser check in that note.
  */
 
 /** How often an open app checks for a new version (it also checks on start and on every return to the foreground). */
@@ -29,8 +33,10 @@ export interface AppUpdatesDeps {
 export interface AppUpdates {
   /** Registers the service worker and starts the update checks. Returns a function that stops them. */
   start(): () => void;
-  /** Delays any update reload until the returned function is called (calling it twice is harmless). */
+  /** Blocks the update reload, even in the background, until released (releasing twice is harmless). */
   holdReload(): () => void;
+  /** Blocks the update reload while the app is on screen; in the background it may still happen. */
+  holdReloadWhileVisible(): () => void;
 }
 
 export function createAppUpdates({
@@ -40,28 +46,32 @@ export function createAppUpdates({
   intervalMs = UPDATE_CHECK_INTERVAL_MS,
 }: AppUpdatesDeps = {}): AppUpdates {
   let holds = 0;
+  let visibleHolds = 0;
   let reloadPending = false;
   let reloaded = false;
 
-  function reloadIfClear() {
-    if (!reloadPending || holds > 0 || reloaded) return;
+  function reloadIfSafe() {
+    if (!reloadPending || reloaded || holds > 0) return;
+    if (visibleHolds > 0 && document.visibilityState !== 'hidden') return;
     reloaded = true;
     reload();
   }
 
   function requestReload() {
     reloadPending = true;
-    reloadIfClear();
+    reloadIfSafe();
   }
 
-  function holdReload() {
-    holds += 1;
+  function hold(onlyWhileVisible: boolean) {
+    if (onlyWhileVisible) visibleHolds += 1;
+    else holds += 1;
     let released = false;
     return () => {
       if (released) return;
       released = true;
-      holds -= 1;
-      reloadIfClear();
+      if (onlyWhileVisible) visibleHolds -= 1;
+      else holds -= 1;
+      reloadIfSafe();
     };
   }
 
@@ -83,25 +93,29 @@ export function createAppUpdates({
       controlled = true;
     });
 
+    let registration: ServiceWorkerRegistration | undefined;
+    const check = () => {
+      registration?.update().catch(() => {
+        // Offline, or the worker went away: the next foreground or hourly check tries again.
+      });
+    };
+    listen(document, 'visibilitychange', () => {
+      if (document.visibilityState === 'visible') check();
+      else reloadIfSafe(); // in the background a reload is invisible: switch now if one is waiting
+    });
+    listen(window, 'pageshow', (event) => {
+      if ((event as PageTransitionEvent).persisted) check(); // restored from the back/forward cache
+    });
+
     let stopped = false;
     // Registers after the page's load event, as the plugin's old injected registerSW.js did.
     register({
       // Without this the plugin reloads by itself when a new worker activates, ignoring holds.
       onNeedReload: requestReload,
-      onRegisteredSW(_swUrl, registration) {
-        if (!registration || stopped) return;
-        const check = () => {
-          registration.update().catch(() => {
-            // Offline, or the worker went away: the next foreground or hourly check tries again.
-          });
-        };
+      onRegisteredSW(_swUrl, reg) {
+        if (!reg || stopped) return;
+        registration = reg;
         check();
-        listen(document, 'visibilitychange', () => {
-          if (document.visibilityState === 'visible') check();
-        });
-        listen(window, 'pageshow', (event) => {
-          if ((event as PageTransitionEvent).persisted) check(); // restored from the back/forward cache
-        });
         const timer = setInterval(check, intervalMs);
         cleanups.push(() => clearInterval(timer));
       },
@@ -113,12 +127,14 @@ export function createAppUpdates({
     };
   }
 
-  return { start, holdReload };
+  return { start, holdReload: () => hold(false), holdReloadWhileVisible: () => hold(true) };
 }
 
 const appUpdates = createAppUpdates();
 
 /** Call once at startup (src/main.tsx). */
 export const startAppUpdates = appUpdates.start;
-/** Hold the update reload while work that must not be interrupted runs (see ReviewScreen). */
+/** Hold the update reload while work that must not be interrupted runs (an analysis; see ReviewScreen). */
 export const holdReload = appUpdates.holdReload;
+/** Hold the update reload while a screen other than the game list is in view (see App). */
+export const holdReloadWhileVisible = appUpdates.holdReloadWhileVisible;

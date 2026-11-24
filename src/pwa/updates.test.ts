@@ -45,6 +45,7 @@ function setVisibility(state: DocumentVisibilityState) {
 afterEach(() => {
   while (running.length) running.pop()!();
   vi.useRealTimers();
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
 });
 
 describe('app updates', () => {
@@ -172,9 +173,72 @@ describe('app updates', () => {
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
+  test('reloadsImmediatelyOnGameList', () => {
+    // Game list or connect screen, nothing running: nothing to lose, so switch right away.
+    const { reload, newWorkerTakesControl } = start();
+    newWorkerTakesControl();
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  test('defersReloadWhileReviewingThenReloadsWhenHidden', () => {
+    // A reload lands on the game list (no routing), so an open review or drill must not be yanked away.
+    const { reload, updates, newWorkerTakesControl } = start();
+    updates.holdReloadWhileVisible();
+
+    newWorkerTakesControl();
+    setVisibility('visible');
+    expect(reload).not.toHaveBeenCalled();
+
+    setVisibility('hidden'); // the app went to the background: the reload is invisible now
+    expect(reload).toHaveBeenCalledTimes(1);
+
+    setVisibility('visible');
+    setVisibility('hidden');
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  test('defersReloadWhileReviewingThenReloadsBackOnTheList', () => {
+    const { reload, updates, newWorkerTakesControl } = start();
+    const leaveReview = updates.holdReloadWhileVisible();
+    newWorkerTakesControl();
+    expect(reload).not.toHaveBeenCalled();
+
+    leaveReview();
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  test('reloadsAtOnceIfTheUpdateArrivesWhileHidden', () => {
+    const { reload, updates, newWorkerTakesControl } = start();
+    updates.holdReloadWhileVisible();
+    setVisibility('hidden');
+    newWorkerTakesControl();
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  test('neverReloadsMidAnalysisEvenWhenHidden', () => {
+    const { reload, updates, newWorkerTakesControl } = start();
+    const onReview = updates.holdReloadWhileVisible();
+    const analysis = updates.holdReload();
+    newWorkerTakesControl();
+
+    setVisibility('hidden');
+    expect(reload).not.toHaveBeenCalled();
+
+    setVisibility('visible');
+    analysis(); // finished, but the finished review is still on screen
+    expect(reload).not.toHaveBeenCalled();
+
+    setVisibility('hidden');
+    expect(reload).toHaveBeenCalledTimes(1);
+    onReview();
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
   test('aHoldWithNoPendingUpdateNeverReloads', () => {
     const { reload, updates } = start();
     updates.holdReload()();
+    updates.holdReloadWhileVisible()();
+    setVisibility('hidden');
     expect(reload).not.toHaveBeenCalled();
   });
 
