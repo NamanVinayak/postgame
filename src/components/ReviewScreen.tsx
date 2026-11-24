@@ -3,7 +3,7 @@ import { Chess } from 'chess.js';
 import type { AnalysisResult, GameSummary } from '../types';
 import { analyzeGame } from '../analysis/analyzeGame';
 import { lineChips, linePositions } from '../analysis/lines';
-import { createStockfishEngine } from '../services/engine/stockfishEngine';
+import { createStockfishEngine, type StockfishEngine } from '../services/engine/stockfishEngine';
 import { getAnalysis, saveAnalysis } from '../services/storage';
 import { holdReload } from '../pwa/updates';
 import { Board } from './Board';
@@ -74,8 +74,9 @@ export function ReviewScreen({ game, myUsername, onBack }: Props) {
     setAnalyzing(true);
     setError(null);
     setProgress({ done: 0, total: Math.max(1, maxIndex) });
-    const engine = createStockfishEngine();
+    let engine: StockfishEngine | null = null;
     try {
+      engine = createStockfishEngine(); // inside the try: if the worker can't start, the hold still ends
       const result = await analyzeGame(game.pgn, engine, game.id, (done, total) =>
         setProgress({ done, total }),
       );
@@ -84,7 +85,7 @@ export function ReviewScreen({ game, myUsername, onBack }: Props) {
     } catch (e) {
       setError('Analysis failed: ' + (e as Error).message);
     } finally {
-      engine.terminate();
+      engine?.terminate();
       setAnalyzing(false);
       runningRef.current = false;
       releaseReload();

@@ -1,4 +1,4 @@
-import { render, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import type { AnalysisResult, GameSummary } from '../types';
 
@@ -33,6 +33,7 @@ vi.mock('../services/engine/stockfishEngine', () => ({
 vi.mock('./Board', () => ({ Board: () => <div /> }));
 
 import { holdReload } from '../pwa/updates';
+import { createStockfishEngine } from '../services/engine/stockfishEngine';
 import { ReviewScreen } from './ReviewScreen';
 
 const game: GameSummary = {
@@ -75,6 +76,16 @@ describe('ReviewScreen and app updates', () => {
     finishAnalysis(result);
     await waitFor(() => expect(order).toContain('release'));
     expect(order).toEqual(['hold', 'save', 'release']);
+  });
+
+  test('releasesTheHoldWhenTheEngineCannotStart', async () => {
+    // e.g. new Worker() throws: the hold must not stay on until the user leaves the screen.
+    vi.mocked(createStockfishEngine).mockImplementationOnce(() => {
+      throw new Error('no worker');
+    });
+    render(<ReviewScreen game={game} myUsername="me" onBack={vi.fn()} />);
+    await screen.findByText('Analysis failed: no worker');
+    expect(order).toEqual(['hold', 'release']);
   });
 
   test('releasesTheHoldWhenTheUserLeavesMidAnalysis', async () => {
