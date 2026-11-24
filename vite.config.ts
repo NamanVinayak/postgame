@@ -14,6 +14,9 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
+      // Registration lives in src/pwa/updates.ts (update checks + a safe reload into a new
+      // version). Never go back to the injected registration-only registerSW.js.
+      injectRegister: false,
       includeAssets: ['favicon.svg', 'icon.svg'],
       manifest: {
         name: 'Postgame — Free Chess Review',
@@ -29,6 +32,11 @@ export default defineConfig({
         ],
       },
       workbox: {
+        // A new version takes control as soon as it is installed; src/pwa/updates.ts then
+        // reloads the page into it. Set explicitly: with injectRegister false the plugin
+        // stops adding these for 'autoUpdate', and new versions would wait forever.
+        skipWaiting: true,
+        clientsClaim: true,
         globPatterns: ['**/*.{js,css,html,svg,wasm}'],
         // The single-threaded Stockfish wasm is ~7 MB; precache it for offline analysis.
         maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
