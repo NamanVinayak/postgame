@@ -2,8 +2,14 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
+import { buildDate, commitSha } from './scripts/build-info.mjs';
 
 export default defineConfig({
+  // The version line (src/components/AppVersion.tsx): which copy of the app a device runs.
+  define: {
+    __APP_COMMIT__: JSON.stringify(commitSha()),
+    __APP_BUILD_DATE__: JSON.stringify(buildDate()),
+  },
   plugins: [
     react(),
     VitePWA({

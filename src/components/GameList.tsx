@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useRecentGames } from '../hooks/useRecentGames';
 import { GameRow } from './GameRow';
+import { AppVersion } from './AppVersion';
 import { CoachLinkForm } from './train/CoachLinkForm';
 import { COPY } from '../constants';
 import { TRAIN_COPY } from '../training/copy';
@@ -74,6 +75,8 @@ export function GameList({ username, onSelect, onSwitchAccount, onTrain, onLinkC
           )}
         </footer>
       )}
+
+      <AppVersion />
     </div>
   );
 }
