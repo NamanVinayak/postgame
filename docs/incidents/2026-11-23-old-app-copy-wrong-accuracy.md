@@ -15,7 +15,7 @@ engine the phone uses (recipe below).
 |---|---|---|
 | The phone, as it ran | 37.2 | 61.3 |
 | Re-run on the **Oct 30 build** (commit `59afa0a`) | 37.3 | 62.3 |
-| Re-run on the **current code** | ~82 | ~73 |
+| Re-run on the **current code** (two runs) | ~82–84 | ~73–74 |
 | Chess.com (`accuracies` in its public API) | 67.96 | 59.25 |
 
 The phone's numbers match the Oct 30 build, not the code deployed that day. That build predates
@@ -60,9 +60,10 @@ So the phone kept executing the Oct 30 JavaScript through several deploys.
 1. Open the app and scroll to the bottom of the game list. The version line's commit should
    match the latest commit on `main` that was deployed.
 2. **No version line at all** means the phone still runs a build from before this fix, which
-   has no update logic. Close the app completely (swipe it away in the app switcher) and open
-   it again, **twice**: the first reopen still shows the old copy while the new one installs in
-   the background; the second opens the new one. (Measured in the browser check below.)
+   has no update logic. Close the app completely (swipe it away in the app switcher), reopen
+   it, leave it open for about 30 seconds, then close and reopen it again; repeat until the
+   version line appears. The first reopen still shows the old copy while the new one downloads
+   in the background (in the browser check below, the second reload showed the new one).
 3. From then on a new deploy arrives on its own within seconds of opening the app or bringing
    it back to the foreground (or within an hour if it stays open), once no analysis is running.
 4. Results cached by an old build are only discarded when `SCHEMA_VERSION` differs. The Oct 30
@@ -83,15 +84,15 @@ Use this before touching any formula (see the AGENTS.md rule).
    `position fen …` + `go movetime <ENGINE.movetimeMs>`, one search at a time. Pass it to
    `analyzeGame(pgn, engine, id)` and print `whiteAccuracy`, `blackAccuracy`, the counts, and
    any ply with accuracy under 25.
-4. Run it with a TypeScript runner that resolves the extensionless imports in `src/`
-   (for example `npx tsx driver.mts <code folder>`; not a project dependency). Expect about ±1
-   point of run-to-run engine variance.
+4. Run it with a TypeScript runner that resolves the extensionless imports in `src/`, for
+   example `npx tsx driver.mts <code folder>` (tsx 4.23 worked; it is not a project
+   dependency). Expect a point or two of run-to-run engine variance.
 
 A winner whose accuracy collapses while showing 0 blunders means a 0% move labelled "best".
 Check terminal and checkmate scoring first (regression test: `analyzeGame.test.ts`,
 "delivering checkmate scores the mating move 100, not 0").
 
-**Known gap, separate from this bug:** on this game the current code (~82 / ~73) still sits
+**Known gap, separate from this bug:** on this game the current code (~82–84 / ~73–74) still sits
 above Chess.com (68 / 59). That's a calibration gap on one game, and one game is not a
 reason to re-fit `ACCURACY_CALIBRATION_GAMMA` (re-fit recipe in `constants.ts`).
 
@@ -123,6 +124,6 @@ folder; Playwright is not a project dependency):
 
 Results on 2026-11-23: the old registration stayed on N1 for 15 s, and reached N2 only on the
 second manual reload. The fix switched in about 1.2 s with one reload. It waited through a
-20-move analysis and unloaded 1 ms after the result was saved. Leaving mid-analysis reloaded
+20-ply analysis and unloaded 1 ms after the result was saved. Leaving mid-analysis reloaded
 within 10 ms with no cache entry written. A device moved from the old build to the fix
 needed two reopens, then took the next deploy by itself in 1.3 s.
