@@ -47,15 +47,18 @@ So the phone kept executing the Oct 30 JavaScript through several deploys.
   once into it, at a safe moment. The app has no routing, so a reload lands on the game list
   (or the connect screen if not connected):
   - **On the game list or connect screen:** reload right away.
-  - **On a review, the training home or a drill:** don't yank the user out. Wait until the
-    app goes to the background (`visibilitychange` to hidden; the reload is then invisible and
-    the user finds the new version next time they look) or until they are back on the list.
-    `App.tsx` holds the reload with `holdReloadWhileVisible()` while those screens are in view.
-- **Never mid-analysis, not even in the background.** `ReviewScreen` holds the reload with
-  `holdReload()` from the start of `analyzeGame` until the result is saved, or until the user
-  leaves the screen. A reload can never leave a half-written cache entry: the result is stored
-  with a single IndexedDB `put`, which commits completely or not at all; an interrupted
-  analysis just isn't cached and runs again.
+  - **On a review, the training home or a drill:** don't yank the user out while they look at
+    it. Wait until they are back on the list, or until the app goes to the background
+    (`visibilitychange` to hidden). In the second case the reload happens out of sight, and
+    the user comes back to the game list on the new version, not to the screen they left (a
+    drill session in progress lives only in memory and is lost). `App.tsx` holds the reload
+    with `holdReloadWhileVisible()` while those screens are in view.
+- **Not while an analysis is running on its review screen, not even in the background.**
+  `ReviewScreen` holds the reload with `holdReload()` from the start of `analyzeGame` until the
+  result is saved. If the user leaves the review mid-run, the hold ends there: the reload then
+  drops that unfinished run, writes nothing, and the game is analyzed again when reopened. A
+  reload can never leave a half-written cache entry: the result is stored with a single
+  IndexedDB `put`, which commits completely or not at all.
 - `skipWaiting` and `clientsClaim` are now set explicitly in `vite.config.ts`. With
   `injectRegister: false` the plugin stops adding them for `autoUpdate`, and a new version
   would wait until every tab was closed.
@@ -73,8 +76,8 @@ So the phone kept executing the Oct 30 JavaScript through several deploys.
    in the background (in the browser check below, the second reload showed the new one).
 3. From then on a new deploy arrives on its own: it installs within seconds of opening the app
    or bringing it back to the foreground (or within an hour if it stays open), and the app
-   switches to it on the game list or the next time it goes to the background, never during an
-   analysis.
+   switches to it on the game list or the next time it goes to the background (coming back to
+   the game list), never while an analysis is running on screen.
 4. Results cached by an old build are only discarded when `SCHEMA_VERSION` differs. The Oct 30
    build wrote version 5 and the current code uses 7, so this game is re-analyzed automatically.
 

@@ -64,10 +64,12 @@ then deploys to GitHub Pages under `/postgame/`.
   it); check terminal/checkmate scoring first (regression test: `analyzeGame.test.ts`,
   "delivering checkmate…"). One game is never a reason to re-fit the calibration.
 - **Phones run a cached copy of the app.** The app checks for updates on start/foreground and
-  reloads into a new version only at a safe moment: on the game list, or when the app goes to
-  the background. It never reloads mid-analysis, and never over an open review or drill.
-  Never go back to the registration-only `registerSW.js`; any change to the update logic
-  needs the real-browser check in [the incident note](docs/incidents/2026-11-23-old-app-copy-wrong-accuracy.md).
+  reloads into a new version: at once on the game list, never while an analysis is running or
+  a review or drill is on screen. With no analysis running, going to the background reloads it
+  and brings the user back to the game list. Leaving a review mid-analysis ends the wait, and
+  the reload drops that unfinished run (nothing is written). Never go back to the
+  registration-only `registerSW.js`; any change to the update logic needs the real-browser
+  check in [the incident note](docs/incidents/2026-11-23-old-app-copy-wrong-accuracy.md).
 - **Privacy:** only public games, all processing on the device, nothing sent anywhere else.
 - **Licensing:** app code is MIT. The bundled Stockfish is GPLv3, so don't modify the
   engine files; talk to them as a separate worker.
