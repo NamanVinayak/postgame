@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { playerExists } from '../services/chesscom';
 import { COPY } from '../constants';
+import { AppVersion } from './AppVersion';
 
 interface Props {
   onConnect: (name: string) => void;
@@ -69,6 +70,7 @@ export function ConnectScreen({ onConnect, onCancel }: Props) {
         <p className="disclaimer">
           Not affiliated with Chess.com. Reads only your public games — no password needed.
         </p>
+        <AppVersion />
       </div>
     </div>
   );

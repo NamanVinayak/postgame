@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useConnectedUser } from './hooks/useConnectedUser';
 import { ConnectScreen } from './components/ConnectScreen';
 import { GameList } from './components/GameList';
@@ -6,6 +6,7 @@ import { ReviewScreen } from './components/ReviewScreen';
 import { TrainHome } from './components/train/TrainHome';
 import { DrillScreen } from './components/train/DrillScreen';
 import { useCoachPack } from './training/useCoachPack';
+import { holdReloadWhileVisible } from './pwa/updates';
 import type { DrillProgress, SessionItem } from './training/scheduler';
 import type { GameSummary } from './types';
 
@@ -19,6 +20,12 @@ export default function App() {
   const [session, setSession] = useState<{ id: number; items: SessionItem[]; progress: Map<string, DrillProgress> } | null>(
     null,
   );
+
+  // A new app version reloads into the game list (there is no routing), so while a review,
+  // the training home or a drill is on screen it waits until the app is in the background.
+  const onGameListOrConnect =
+    !username || (!selected && !(view === 'drilling' && session) && !(view === 'train' && coach.url));
+  useEffect(() => (onGameListOrConnect ? undefined : holdReloadWhileVisible()), [onGameListOrConnect]);
 
   if (!username) {
     return <ConnectScreen onConnect={connect} />;

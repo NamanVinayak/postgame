@@ -36,6 +36,8 @@ then deploys to GitHub Pages under `/postgame/`.
 | `src/training/` | Coach packs (`pack.ts`, `parsePack`), spaced-repetition scheduler, drill sessions |
 | `src/components/`, `src/hooks/` | Connect, game list and review screens; line explorer |
 | `src/constants.ts` | Every tunable number (engine time, thresholds, calibration) with comments |
+| `src/pwa/updates.ts` | Service-worker registration, update checks, reload into a new version |
+| `docs/incidents/` | What went wrong in production, how it was found, how to check for it |
 | `docs/superpowers/` | The design spec and step-by-step plan the app was built from |
 
 ## Rules that keep it correct
@@ -53,6 +55,21 @@ then deploys to GitHub Pages under `/postgame/`.
 - **iOS Safari has to keep working:** use the single-threaded "lite" engine build, with no
   SharedArrayBuffer and no COOP/COEP headers.
 - **Bump `SCHEMA_VERSION`** when the shape of a cached analysis changes.
+- **When accuracy looks wrong, investigate in this order before touching any formula:**
+  (a) fetch Chess.com's own `accuracies` for the game from the public API
+  (`/pub/player/<user>/games/<YYYY>/<MM>`); (b) re-run the game on the current code (recipe
+  in [the incident note](docs/incidents/2026-11-23-old-app-copy-wrong-accuracy.md));
+  (c) check which app version the device ran (the version line). A winner whose accuracy
+  collapses while showing 0 blunders = a 0% move labelled "best" (the harmonic mean punishes
+  it); check terminal/checkmate scoring first (regression test: `analyzeGame.test.ts`,
+  "delivering checkmate…"). One game is never a reason to re-fit the calibration.
+- **Phones run a cached copy of the app.** The app checks for updates on start/foreground and
+  reloads into a new version: at once on the game list, never while an analysis is running or
+  a review or drill is on screen. With no analysis running, going to the background reloads it
+  and brings the user back to the game list. Leaving a review mid-analysis ends the wait, and
+  the reload drops that unfinished run (nothing is written). Never go back to the
+  registration-only `registerSW.js`; any change to the update logic needs the real-browser
+  check in [the incident note](docs/incidents/2026-11-23-old-app-copy-wrong-accuracy.md).
 - **Privacy:** only public games, all processing on the device, nothing sent anywhere else.
 - **Licensing:** app code is MIT. The bundled Stockfish is GPLv3, so don't modify the
   engine files; talk to them as a separate worker.

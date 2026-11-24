@@ -3,8 +3,9 @@ import { Chess } from 'chess.js';
 import type { AnalysisResult, GameSummary } from '../types';
 import { analyzeGame } from '../analysis/analyzeGame';
 import { lineChips, linePositions } from '../analysis/lines';
-import { createStockfishEngine } from '../services/engine/stockfishEngine';
+import { createStockfishEngine, type StockfishEngine } from '../services/engine/stockfishEngine';
 import { getAnalysis, saveAnalysis } from '../services/storage';
+import { holdReload } from '../pwa/updates';
 import { Board } from './Board';
 import { MoveBadge } from './MoveBadge';
 import { EvalBar } from './EvalBar';
@@ -45,6 +46,7 @@ export function ReviewScreen({ game, myUsername, onBack }: Props) {
   // the first k line moves). Null means the board shows the actual game.
   const [exploring, setExploring] = useState<{ ply: number; step: number } | null>(null);
   const runningRef = useRef(false);
+  const releaseReloadRef = useRef<(() => void) | null>(null);
 
   const { positions, moveTos } = useMemo(() => {
     try {
@@ -66,11 +68,15 @@ export function ReviewScreen({ game, myUsername, onBack }: Props) {
   const runAnalysis = useCallback(async () => {
     if (runningRef.current) return; // guard against double-invoke (StrictMode / rapid taps)
     runningRef.current = true;
+    // A new app version waits until this analysis is saved (or the user leaves the screen).
+    const releaseReload = holdReload();
+    releaseReloadRef.current = releaseReload;
     setAnalyzing(true);
     setError(null);
     setProgress({ done: 0, total: Math.max(1, maxIndex) });
-    const engine = createStockfishEngine();
+    let engine: StockfishEngine | null = null;
     try {
+      engine = createStockfishEngine(); // inside the try: if the worker can't start, the hold still ends
       const result = await analyzeGame(game.pgn, engine, game.id, (done, total) =>
         setProgress({ done, total }),
       );
@@ -79,11 +85,16 @@ export function ReviewScreen({ game, myUsername, onBack }: Props) {
     } catch (e) {
       setError('Analysis failed: ' + (e as Error).message);
     } finally {
-      engine.terminate();
+      engine?.terminate();
       setAnalyzing(false);
       runningRef.current = false;
+      releaseReload();
     }
   }, [game.pgn, game.id, maxIndex]);
+
+  // Leaving mid-analysis releases the hold too (a hung engine must not pin the old version).
+  // A reload then can only drop unsaved work: saveAnalysis is one IndexedDB put, all or nothing.
+  useEffect(() => () => releaseReloadRef.current?.(), []);
 
   // Load the cached analysis; if there is none, start analyzing automatically —
   // opening an unanalyzed game already means "analyze it".
