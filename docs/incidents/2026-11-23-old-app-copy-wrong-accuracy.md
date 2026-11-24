@@ -43,12 +43,19 @@ So the phone kept executing the Oct 30 JavaScript through several deploys.
 - `src/pwa/updates.ts` registers the worker (`virtual:pwa-register`; `injectRegister: false`, so
   `registerSW.js` is gone) and checks for a new version on start, on every return to the
   foreground (`visibilitychange` to visible, and `pageshow` from the back/forward cache) and
-  hourly. When a new worker takes control of a page that already had one, it reloads the page
-  once, at the same URL (the game list, or the connect screen if not connected).
-- **Never mid-analysis.** `ReviewScreen` holds the reload from the start of `analyzeGame` until
-  the result is saved, or until the user leaves the screen. A reload can never leave a
-  half-written cache entry: the result is stored with a single IndexedDB `put`, which commits
-  completely or not at all; an interrupted analysis just isn't cached and runs again.
+  hourly. When a new worker takes control of a page that already had one, the page reloads
+  once into it, at a safe moment. The app has no routing, so a reload lands on the game list
+  (or the connect screen if not connected):
+  - **On the game list or connect screen:** reload right away.
+  - **On a review, the training home or a drill:** don't yank the user out. Wait until the
+    app goes to the background (`visibilitychange` to hidden; the reload is then invisible and
+    the user finds the new version next time they look) or until they are back on the list.
+    `App.tsx` holds the reload with `holdReloadWhileVisible()` while those screens are in view.
+- **Never mid-analysis, not even in the background.** `ReviewScreen` holds the reload with
+  `holdReload()` from the start of `analyzeGame` until the result is saved, or until the user
+  leaves the screen. A reload can never leave a half-written cache entry: the result is stored
+  with a single IndexedDB `put`, which commits completely or not at all; an interrupted
+  analysis just isn't cached and runs again.
 - `skipWaiting` and `clientsClaim` are now set explicitly in `vite.config.ts`. With
   `injectRegister: false` the plugin stops adding them for `autoUpdate`, and a new version
   would wait until every tab was closed.
@@ -64,8 +71,10 @@ So the phone kept executing the Oct 30 JavaScript through several deploys.
    it, leave it open for about 30 seconds, then close and reopen it again; repeat until the
    version line appears. The first reopen still shows the old copy while the new one downloads
    in the background (in the browser check below, the second reload showed the new one).
-3. From then on a new deploy arrives on its own within seconds of opening the app or bringing
-   it back to the foreground (or within an hour if it stays open), once no analysis is running.
+3. From then on a new deploy arrives on its own: it installs within seconds of opening the app
+   or bringing it back to the foreground (or within an hour if it stays open), and the app
+   switches to it on the game list or the next time it goes to the background, never during an
+   analysis.
 4. Results cached by an old build are only discarded when `SCHEMA_VERSION` differs. The Oct 30
    build wrote version 5 and the current code uses 7, so this game is re-analyzed automatically.
 
@@ -113,17 +122,26 @@ folder; Playwright is not a project dependency):
 4. Swap the served root to N2. Simulate a return to the foreground: in the page, set
    `document.visibilityState` to hidden then visible
    (`Object.defineProperty(document, 'visibilityState', …)`) and dispatch `visibilitychange`.
-5. Pass: the version line shows N2 within 10 s, after exactly one reload. With the old
-   registration-only `registerSW.js` the page stays on N1, makes no `sw.js` request, and only the
-   second manual reload reaches N2.
-6. Mid-analysis: give the page a fixture Chess.com account (`context.route` on
-   `https://api.chess.com/**`; set `postgame.username` in localStorage), open an unanalyzed
-   game, swap to N2 and foreground it while "Analyzing move …" shows. Pass: no reload until the
-   analysis is saved (then exactly one, and IndexedDB holds one complete entry), and leaving the
-   screen mid-analysis reloads at once without writing an entry.
+5. Pass (connect screen or game list): the version line shows N2 within 10 s, after exactly
+   one reload. With the old registration-only `registerSW.js` the page stays on N1, makes no
+   `sw.js` request, and only the second manual reload reaches N2.
+6. Give the page a fixture Chess.com account (`context.route` on `https://api.chess.com/**`;
+   set `postgame.username` in localStorage) and open an unanalyzed game. "Hidden" below means
+   setting `visibilityState` to hidden and dispatching `visibilitychange`. Pass:
+   - swapped and foregrounded on a **finished review**: no reload while it stays on screen;
+     exactly one reload as soon as the page is hidden, landing on the list on N2;
+   - swapped **mid-analysis**: no reload during the analysis or while the finished review stays
+     on screen; one reload when hidden, and IndexedDB holds one complete entry;
+   - swapped mid-analysis, then **hidden**: no reload until the analysis is saved, then one;
+   - swapped mid-analysis, then the user **leaves** for the list: one reload at once, and no
+     entry written.
 
-Results on 2026-11-23: the old registration stayed on N1 for 15 s, and reached N2 only on the
-second manual reload. The fix switched in about 1.2 s with one reload. It waited through a
-20-ply analysis and unloaded 1 ms after the result was saved. Leaving mid-analysis reloaded
-within 10 ms with no cache entry written. A device moved from the old build to the fix
-needed two reopens, then took the next deploy by itself in 1.3 s.
+Results on 2026-11-23:
+- **Old registration:** stayed on N1 for 15 s, and reached N2 only on the second manual reload.
+- **Connect screen and game list:** the fix switched in 1.2–1.8 s, with one reload.
+- **Finished review:** it stayed put for 10 s, then reloaded 16 ms after the page was hidden.
+- **During a 20-ply analysis:** no reload at any point, even while hidden. Hidden, it unloaded
+  1 ms after the result was saved; on screen, it waited until the page was hidden. Either way
+  one complete entry was cached.
+- **Leaving mid-analysis:** reloaded within 25 ms, with no entry written.
+- **Old build to the fix:** needed two reopens, then took the next deploy by itself in 1.2 s.
