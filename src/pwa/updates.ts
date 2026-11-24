@@ -12,9 +12,11 @@ import { registerSW } from 'virtual:pwa-register';
  * So: check for a new version on start, on every return to the foreground and hourly. When a
  * new worker takes control, reload once into it at a safe moment. The app has no routing, so a
  * reload lands on the game list:
- *   - never while an analysis runs (`holdReload`), not even in the background;
- *   - while a review or drill is on screen (`holdReloadWhileVisible`), wait until the app goes
- *     to the background, where the reload is invisible, or until the user is back on the list.
+ *   - not while an analysis is running on its review screen (`holdReload`), not even in the
+ *     background; leaving the review mid-run ends the hold, and the reload drops that run;
+ *   - while a review or drill is on screen (`holdReloadWhileVisible`), wait until the user is
+ *     back on the list or the app goes to the background; then the user comes back to the game
+ *     list on the new version (an in-memory drill session is lost).
  * Any change here needs the real-browser check in that note.
  */
 
@@ -87,7 +89,8 @@ export function createAppUpdates({
 
     // A page that started under a worker and sees a new one take control is running old JS.
     // On a first visit no worker controlled the page; the one that claims it is this same version.
-    let controlled = Boolean(sw.controller);
+    const controllerAtStart = sw.controller;
+    let controlled = Boolean(controllerAtStart);
     listen(sw, 'controllerchange', () => {
       if (controlled) requestReload();
       controlled = true;
@@ -104,14 +107,27 @@ export function createAppUpdates({
       else reloadIfSafe(); // in the background a reload is invisible: switch now if one is waiting
     });
     listen(window, 'pageshow', (event) => {
-      if ((event as PageTransitionEvent).persisted) check(); // restored from the back/forward cache
+      if (!(event as PageTransitionEvent).persisted) return;
+      // Restored from the back/forward cache. A reload started before the page was cached can be
+      // dropped, leaving this restored page on the old code: allow it once more.
+      if (reloaded) {
+        reloaded = false;
+        reloadIfSafe();
+      }
+      check();
     });
 
     let stopped = false;
     // Registers after the page's load event, as the plugin's old injected registerSW.js did.
     register({
       // Without this the plugin reloads by itself when a new worker activates, ignoring holds.
-      onNeedReload: requestReload,
+      onNeedReload() {
+        // workbox-window also reports "activated" for the worker this page already runs under
+        // (it was still activating when the page loaded, e.g. right after an update reload).
+        // Nothing new then; a genuinely new worker arrives through 'controllerchange' anyway.
+        if (sw.controller && sw.controller === controllerAtStart) return;
+        requestReload();
+      },
       onRegisteredSW(_swUrl, reg) {
         if (!reg || stopped) return;
         registration = reg;

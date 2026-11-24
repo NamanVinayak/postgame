@@ -31,9 +31,13 @@ function start({
     reload,
     updates,
     stop,
+    serviceWorker,
     pluginOptions: () => options,
     /** What the browser does when a new service worker calls clients.claim(). */
-    newWorkerTakesControl: () => serviceWorker.dispatchEvent(new Event('controllerchange')),
+    newWorkerTakesControl: () => {
+      (serviceWorker as { controller: object | null }).controller = {};
+      serviceWorker.dispatchEvent(new Event('controllerchange'));
+    },
   };
 }
 
@@ -136,14 +140,46 @@ describe('app updates', () => {
 
   test('routesThePluginReloadThroughTheSameGate', () => {
     // vite-plugin-pwa reloads by itself on "activated" unless onNeedReload is given.
-    const { reload, updates, pluginOptions } = start();
+    const { reload, updates, pluginOptions, serviceWorker } = start();
     expect(pluginOptions().onNeedReload).toBeTypeOf('function');
 
     const release = updates.holdReload();
+    (serviceWorker as { controller: object | null }).controller = {}; // a new worker controls the page
     pluginOptions().onNeedReload!();
     expect(reload).not.toHaveBeenCalled();
     release();
     expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  test('ignoresThePluginSignalForTheWorkerAlreadyInControl', () => {
+    // Just reloaded into a new version whose worker was still activating: workbox-window reports
+    // "activated, isUpdate", but this page already runs under that worker. No second reload.
+    const { reload, pluginOptions, newWorkerTakesControl } = start();
+    pluginOptions().onNeedReload!();
+    expect(reload).not.toHaveBeenCalled();
+
+    newWorkerTakesControl(); // a genuinely newer version still reloads
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  test('retriesTheReloadAfterABackForwardCacheRestore', () => {
+    // The reload can be dropped while the page is being put into the back/forward cache;
+    // a restored page would otherwise keep running the old code.
+    const { reload, newWorkerTakesControl } = start();
+    newWorkerTakesControl();
+    expect(reload).toHaveBeenCalledTimes(1);
+
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: false }));
+    expect(reload).toHaveBeenCalledTimes(1);
+
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+    expect(reload).toHaveBeenCalledTimes(2);
+  });
+
+  test('aBackForwardCacheRestoreWithNothingPendingDoesNotReload', () => {
+    const { reload } = start();
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+    expect(reload).not.toHaveBeenCalled();
   });
 
   test('waitsForAnalysisToFinishBeforeReload', () => {

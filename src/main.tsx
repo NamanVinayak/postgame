@@ -4,7 +4,11 @@ import App from './App';
 import { startAppUpdates } from './pwa/updates';
 import './styles.css';
 
-startAppUpdates();
+try {
+  startAppUpdates();
+} catch {
+  // e.g. a SecurityError reading navigator.serviceWorker (some privacy modes): run without updates.
+}
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
